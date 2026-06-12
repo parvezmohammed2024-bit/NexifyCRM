@@ -470,7 +470,7 @@ export default function NexifyCRM() {
       setLeads(newLeads);
       persist(newLeads, clients);
     } catch (err) {
-      setImportError("AI tagging didn't work this time — please try again.");
+      setImportError("AI tagging failed: " + (err?.message || "unknown error"));
     }
     setAiBusy(false);
   };
@@ -541,7 +541,7 @@ export default function NexifyCRM() {
       setToast(`Checked ${Object.keys(map).length} numbers — ${unlikelyCount} look like landlines (greyed out)`);
       setTimeout(() => setToast(""), 4000);
     } catch (err) {
-      setImportError("AI number check didn't work this time — please try again.");
+      setImportError("AI WhatsApp check failed: " + (err?.message || "unknown error"));
     }
     setAiBusy(false);
   };
