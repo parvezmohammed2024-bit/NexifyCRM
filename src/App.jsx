@@ -105,6 +105,8 @@ export default function NexifyCRM() {
   const [roles, setRoles] = useState({});
   const [profiles, setProfiles] = useState({});
   const [logoUrl, setLogoUrl] = useState("");
+  const [taskTypes, setTaskTypes] = useState(TASK_TYPES);
+  const [newTypeText, setNewTypeText] = useState("");
   const [profileModal, setProfileModal] = useState(false);
   const [profileForm, setProfileForm] = useState({ name: "", avatar: "" });
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
@@ -122,6 +124,7 @@ export default function NexifyCRM() {
       const R = d.roles || {};
       const P = d.profiles || {};
       const LOGO = d.logoUrl || "";
+      const TT = (d.taskTypes && d.taskTypes.length) ? d.taskTypes : TASK_TYPES;
       let CK = d.checkins || [];
       setLeads(L);
       setClients(C);
@@ -129,12 +132,13 @@ export default function NexifyCRM() {
       setRoles(R);
       setProfiles(P);
       setLogoUrl(LOGO);
+      setTaskTypes(TT);
       // Auto daily check-in: logging in once a day records the user's attendance
       const today = todayStr();
       if (email && !CK.some((c) => c.email === email && c.date === today)) {
         CK = [...CK, { email, date: today }];
         try {
-          await supabase.from("crm_data").update({ data: { leads: L, clients: C, generalTasks: G, roles: R, profiles: P, logoUrl: LOGO, checkins: CK }, updated_at: new Date().toISOString() }).eq("id", 1);
+          await supabase.from("crm_data").update({ data: { leads: L, clients: C, generalTasks: G, roles: R, profiles: P, logoUrl: LOGO, taskTypes: TT, checkins: CK }, updated_at: new Date().toISOString() }).eq("id", 1);
           await supabase.from("audit_log").insert({ user_email: email, action: `checked in for ${today}` });
         } catch (e) {}
       }
@@ -176,7 +180,7 @@ export default function NexifyCRM() {
     if (!session || !loaded) return;
     const email = session?.user?.email || "";
     const r = roles[email] || (email === SUPER_ADMIN ? "Executive" : "Member");
-    if (r !== "Executive" && ["leads", "clients", "team"].includes(tab)) {
+    if (r !== "Executive" && ["leads", "clients", "team", "reports", "history"].includes(tab)) {
       setTab("dashboard");
     }
   }, [tab, roles, session, loaded]);
@@ -201,10 +205,10 @@ export default function NexifyCRM() {
     } catch (e) {}
   };
 
-  const persist = async (newLeads = leads, newClients = clients, newGeneral = generalTasks, newCheckins = checkins, newRoles = roles, newProfiles = profiles, newLogo = logoUrl) => {
+  const persist = async (newLeads = leads, newClients = clients, newGeneral = generalTasks, newCheckins = checkins, newRoles = roles, newProfiles = profiles, newLogo = logoUrl, newTaskTypes = taskTypes) => {
     try {
       setSaveState("saving");
-      const { error } = await supabase.from("crm_data").update({ data: { leads: newLeads, clients: newClients, generalTasks: newGeneral, checkins: newCheckins, roles: newRoles, profiles: newProfiles, logoUrl: newLogo }, updated_at: new Date().toISOString() }).eq("id", 1);
+      const { error } = await supabase.from("crm_data").update({ data: { leads: newLeads, clients: newClients, generalTasks: newGeneral, checkins: newCheckins, roles: newRoles, profiles: newProfiles, logoUrl: newLogo, taskTypes: newTaskTypes }, updated_at: new Date().toISOString() }).eq("id", 1);
       if (error) throw error;
       setSaveState("saved");
       setTimeout(() => setSaveState(""), 1500);
@@ -236,6 +240,23 @@ export default function NexifyCRM() {
     setRoles(newRoles);
     persist(leads, clients, generalTasks, checkins, newRoles);
     logAudit(`set ${ownerName(email)}'s role to ${role}`);
+  };
+
+  const addTaskType = () => {
+    const name = newTypeText.trim();
+    if (!name || taskTypes.includes(name)) { setNewTypeText(""); return; }
+    const newTypes = [...taskTypes, name];
+    setTaskTypes(newTypes);
+    persist(leads, clients, generalTasks, checkins, roles, profiles, logoUrl, newTypes);
+    logAudit(`added task type "${name}"`);
+    setNewTypeText("");
+  };
+
+  const removeTaskType = (name) => {
+    const newTypes = taskTypes.filter((t) => t !== name);
+    setTaskTypes(newTypes);
+    persist(leads, clients, generalTasks, checkins, roles, profiles, logoUrl, newTypes);
+    logAudit(`removed task type "${name}"`);
   };
 
   const openProfile = () => {
@@ -854,6 +875,23 @@ export default function NexifyCRM() {
   const myRole = roles[myEmail] || (myEmail === SUPER_ADMIN ? "Executive" : "Member");
   const isExec = myRole === "Executive";
   const knownPeople = [...new Set([...teamMembers, ...checkins.map((c) => c.email), ...Object.keys(roles), ...Object.keys(profiles)].filter(Boolean))].sort();
+
+  // ---- Leaderboard: per-user task performance ----
+  const realTasks = allTasks.filter((t) => t.kind === "task" || t.kind === "general");
+  const leaderboard = knownPeople.map((email) => {
+    const mine = realTasks.filter((t) => t.assignee === email);
+    const completed = mine.filter((t) => t.done).length;
+    const overdue = mine.filter((t) => !t.done && t.due && t.due < todayStr()).length;
+    const pending = mine.filter((t) => !t.done && (!t.due || t.due >= todayStr())).length;
+    const signins = checkins.filter((c) => c.email === email).length;
+    const total = mine.length;
+    const rate = total > 0 ? Math.round((completed / total) * 100) : 0;
+    return { email, signins, total, completed, pending, overdue, rate };
+  }).sort((a, b) => b.completed - a.completed || b.rate - a.rate);
+  const teamSignins = checkins.length;
+  const teamCompleted = realTasks.filter((t) => t.done).length;
+  const teamOverdue = realTasks.filter((t) => !t.done && t.due && t.due < todayStr()).length;
+  const teamPending = realTasks.filter((t) => !t.done && (!t.due || t.due >= todayStr())).length;
   const visibleTasks = allTasks.filter((t) => {
     if (taskTypeFilter === "All") return true;
     if (taskTypeFilter === "Mine") return t.assignee === myEmail;
@@ -1136,6 +1174,7 @@ export default function NexifyCRM() {
                 { id: "deals", label: "Deals", icon: TrendingUp, exec: false },
                 { id: "tasks", label: "Tasks", icon: ListChecks, exec: false },
                 { id: "chat", label: "Chat", icon: MessageCircle, exec: false },
+                { id: "reports", label: "Reports", icon: TrendingUp, exec: true },
                 { id: "history", label: "History", icon: History, exec: true },
                 { id: "team", label: "Team", icon: Users, exec: true },
               ].filter((t) => isExec || !t.exec).map((t) => (
@@ -1740,7 +1779,7 @@ export default function NexifyCRM() {
 
             <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
               <div className="flex flex-wrap gap-1.5">
-                {["All", "Mine", ...TASK_TYPES].map((f) => (
+                {["All", "Mine", ...taskTypes].map((f) => (
                   <button key={f} onClick={() => setTaskTypeFilter(f)} className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${taskTypeFilter === f ? "bg-indigo-600 text-white" : "bg-white border border-gray-200 text-gray-600 hover:bg-gray-50"}`}>{f}</button>
                 ))}
               </div>
@@ -1907,6 +1946,107 @@ export default function NexifyCRM() {
                 </div>
               )}
             </div>
+
+            <div className="bg-white rounded-xl border border-gray-200 p-5 mt-4">
+              <h2 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-2"><ListChecks size={15} /> Task types</h2>
+              <p className="text-xs text-gray-400 mb-3">Add or remove the task types your team can choose when creating tasks.</p>
+              <div className="flex flex-wrap gap-2 mb-3">
+                {taskTypes.map((t) => (
+                  <span key={t} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 text-xs font-medium">
+                    {t}
+                    {taskTypes.length > 1 && <button onClick={() => removeTaskType(t)} className="text-gray-400 hover:text-red-500"><X size={12} /></button>}
+                  </span>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <input value={newTypeText} onChange={(e) => setNewTypeText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addTaskType()} placeholder="New type… e.g. WhatsApp" className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                <button onClick={addTaskType} disabled={!newTypeText.trim()} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition disabled:opacity-50">Add type</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === "reports" && isExec && (
+          <div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+              <div className="bg-white rounded-xl border border-gray-200 p-4">
+                <div className="flex items-center gap-2 text-gray-400 text-xs mb-2"><Check size={14} /> Total sign-ins</div>
+                <div className="text-2xl font-semibold text-gray-900">{teamSignins}</div>
+              </div>
+              <div className="bg-white rounded-xl border border-gray-200 p-4">
+                <div className="flex items-center gap-2 text-gray-400 text-xs mb-2"><ListChecks size={14} /> Tasks completed</div>
+                <div className="text-2xl font-semibold text-emerald-600">{teamCompleted}</div>
+              </div>
+              <div className="bg-white rounded-xl border border-gray-200 p-4">
+                <div className="flex items-center gap-2 text-gray-400 text-xs mb-2"><Clock size={14} /> Pending</div>
+                <div className="text-2xl font-semibold text-gray-900">{teamPending}</div>
+              </div>
+              <div className="bg-white rounded-xl border border-gray-200 p-4">
+                <div className="flex items-center gap-2 text-gray-400 text-xs mb-2"><AlertTriangle size={14} /> Missed (overdue)</div>
+                <div className="text-2xl font-semibold text-red-600">{teamOverdue}</div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-xl border border-gray-200 p-5 mb-4">
+              <h2 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-2"><TrendingUp size={15} className="text-indigo-600" /> Performance graph</h2>
+              <p className="text-xs text-gray-400 mb-4">Each person's tasks: <span className="text-emerald-600 font-medium">completed</span> · <span className="text-amber-600 font-medium">pending</span> · <span className="text-red-600 font-medium">overdue</span>.</p>
+              {leaderboard.filter((u) => u.total > 0).length === 0 ? (
+                <p className="text-xs text-gray-400">No tasks assigned yet.</p>
+              ) : (
+                <div className="space-y-3">
+                  {leaderboard.filter((u) => u.total > 0).map((u) => (
+                    <div key={u.email} className="flex items-center gap-3">
+                      <span className="text-xs text-gray-600 w-24 shrink-0 truncate">{ownerName(u.email)}</span>
+                      <div className="flex-1 flex h-3 rounded-full overflow-hidden bg-gray-100">
+                        {u.completed > 0 && <div className="bg-emerald-500" style={{ width: `${(u.completed / u.total) * 100}%` }} title={`${u.completed} completed`} />}
+                        {u.pending > 0 && <div className="bg-amber-400" style={{ width: `${(u.pending / u.total) * 100}%` }} title={`${u.pending} pending`} />}
+                        {u.overdue > 0 && <div className="bg-red-500" style={{ width: `${(u.overdue / u.total) * 100}%` }} title={`${u.overdue} overdue`} />}
+                      </div>
+                      <span className="text-xs font-medium text-gray-700 w-10 text-right">{u.rate}%</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <h2 className="text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2"><Users size={15} /> Leaderboard</h2>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-xs text-gray-400 text-left border-b border-gray-100">
+                      <th className="py-2 pr-3">#</th>
+                      <th className="py-2 pr-3">Member</th>
+                      <th className="py-2 pr-3 text-center">Sign-ins</th>
+                      <th className="py-2 pr-3 text-center">Total</th>
+                      <th className="py-2 pr-3 text-center">Completed</th>
+                      <th className="py-2 pr-3 text-center">Pending</th>
+                      <th className="py-2 pr-3 text-center">Missed</th>
+                      <th className="py-2 pr-3 text-center">Rate</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {leaderboard.map((u, i) => (
+                      <tr key={u.email} className="border-b border-gray-50 last:border-0">
+                        <td className="py-2 pr-3 text-gray-400">{i + 1}</td>
+                        <td className="py-2 pr-3">
+                          <span className="flex items-center gap-2">
+                            {avatarOf(u.email) ? <img src={avatarOf(u.email)} alt="" className="w-6 h-6 rounded-full object-cover" /> : <span className="w-6 h-6 rounded-full bg-indigo-50 text-indigo-700 flex items-center justify-center text-xs font-semibold">{ownerName(u.email).slice(0, 1).toUpperCase()}</span>}
+                            <span className="text-gray-800">{ownerName(u.email)}</span>
+                          </span>
+                        </td>
+                        <td className="py-2 pr-3 text-center text-gray-700">{u.signins}</td>
+                        <td className="py-2 pr-3 text-center text-gray-700">{u.total}</td>
+                        <td className="py-2 pr-3 text-center text-emerald-600 font-medium">{u.completed}</td>
+                        <td className="py-2 pr-3 text-center text-gray-700">{u.pending}</td>
+                        <td className="py-2 pr-3 text-center text-red-600 font-medium">{u.overdue}</td>
+                        <td className="py-2 pr-3 text-center font-semibold text-gray-900">{u.total > 0 ? `${u.rate}%` : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1953,7 +2093,7 @@ export default function NexifyCRM() {
                 <div>
                   <label className={labelCls}>Type</label>
                   <select className={inputCls} value={taskForm.type} onChange={(e) => setTaskForm({ ...taskForm, type: e.target.value })}>
-                    {TASK_TYPES.map((t) => <option key={t}>{t}</option>)}
+                    {taskTypes.map((t) => <option key={t}>{t}</option>)}
                   </select>
                 </div>
                 <div>
