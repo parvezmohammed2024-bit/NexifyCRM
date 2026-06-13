@@ -83,6 +83,7 @@ export default function NexifyCRM() {
   const [activityText, setActivityText] = useState("");
   const [taskText, setTaskText] = useState("");
   const [taskModal, setTaskModal] = useState(false);
+  const [taskEditId, setTaskEditId] = useState(null);
   const [taskForm, setTaskForm] = useState({ clientId: "", type: "Call", title: "", description: "", due: "", dueTime: "", priority: "Medium", assignee: "" });
   const [completing, setCompleting] = useState(null); // { clientId, taskId }
   const [proofLink, setProofLink] = useState("");
@@ -102,6 +103,12 @@ export default function NexifyCRM() {
   const [generalTasks, setGeneralTasks] = useState([]);
   const [checkins, setCheckins] = useState([]);
   const [roles, setRoles] = useState({});
+  const [profiles, setProfiles] = useState({});
+  const [logoUrl, setLogoUrl] = useState("");
+  const [profileModal, setProfileModal] = useState(false);
+  const [profileForm, setProfileForm] = useState({ name: "", avatar: "" });
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatText, setChatText] = useState("");
 
@@ -113,17 +120,21 @@ export default function NexifyCRM() {
       const C = (d.clients || []).map((c) => ({ tasks: [], payments: [], ...c }));
       const G = d.generalTasks || [];
       const R = d.roles || {};
+      const P = d.profiles || {};
+      const LOGO = d.logoUrl || "";
       let CK = d.checkins || [];
       setLeads(L);
       setClients(C);
       setGeneralTasks(G);
       setRoles(R);
+      setProfiles(P);
+      setLogoUrl(LOGO);
       // Auto daily check-in: logging in once a day records the user's attendance
       const today = todayStr();
       if (email && !CK.some((c) => c.email === email && c.date === today)) {
         CK = [...CK, { email, date: today }];
         try {
-          await supabase.from("crm_data").update({ data: { leads: L, clients: C, generalTasks: G, roles: R, checkins: CK }, updated_at: new Date().toISOString() }).eq("id", 1);
+          await supabase.from("crm_data").update({ data: { leads: L, clients: C, generalTasks: G, roles: R, profiles: P, logoUrl: LOGO, checkins: CK }, updated_at: new Date().toISOString() }).eq("id", 1);
           await supabase.from("audit_log").insert({ user_email: email, action: `checked in for ${today}` });
         } catch (e) {}
       }
@@ -190,10 +201,10 @@ export default function NexifyCRM() {
     } catch (e) {}
   };
 
-  const persist = async (newLeads = leads, newClients = clients, newGeneral = generalTasks, newCheckins = checkins, newRoles = roles) => {
+  const persist = async (newLeads = leads, newClients = clients, newGeneral = generalTasks, newCheckins = checkins, newRoles = roles, newProfiles = profiles, newLogo = logoUrl) => {
     try {
       setSaveState("saving");
-      const { error } = await supabase.from("crm_data").update({ data: { leads: newLeads, clients: newClients, generalTasks: newGeneral, checkins: newCheckins, roles: newRoles }, updated_at: new Date().toISOString() }).eq("id", 1);
+      const { error } = await supabase.from("crm_data").update({ data: { leads: newLeads, clients: newClients, generalTasks: newGeneral, checkins: newCheckins, roles: newRoles, profiles: newProfiles, logoUrl: newLogo }, updated_at: new Date().toISOString() }).eq("id", 1);
       if (error) throw error;
       setSaveState("saved");
       setTimeout(() => setSaveState(""), 1500);
@@ -225,6 +236,62 @@ export default function NexifyCRM() {
     setRoles(newRoles);
     persist(leads, clients, generalTasks, checkins, newRoles);
     logAudit(`set ${ownerName(email)}'s role to ${role}`);
+  };
+
+  const openProfile = () => {
+    const p = profiles[session?.user?.email] || {};
+    setProfileForm({ name: p.name || "", avatar: p.avatar || "" });
+    setProfileModal(true);
+  };
+
+  const uploadAvatar = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingAvatar(true);
+    try {
+      const ext = (file.name.split(".").pop() || "png").toLowerCase();
+      const path = `avatar-${Date.now()}.${ext}`;
+      const { error } = await supabase.storage.from("proofs").upload(path, file, { upsert: false });
+      if (error) throw error;
+      const { data } = supabase.storage.from("proofs").getPublicUrl(path);
+      setProfileForm((f) => ({ ...f, avatar: data.publicUrl }));
+    } catch (err) {
+      setToast("Photo upload failed — try a smaller image.");
+      setTimeout(() => setToast(""), 3500);
+    }
+    setUploadingAvatar(false);
+    e.target.value = "";
+  };
+
+  const saveProfile = () => {
+    const email = session?.user?.email;
+    if (!email) return;
+    const newProfiles = { ...profiles, [email]: { name: profileForm.name.trim(), avatar: profileForm.avatar } };
+    setProfiles(newProfiles);
+    persist(leads, clients, generalTasks, checkins, roles, newProfiles);
+    logAudit(`updated their profile`);
+    setProfileModal(false);
+  };
+
+  const uploadLogo = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingLogo(true);
+    try {
+      const ext = (file.name.split(".").pop() || "png").toLowerCase();
+      const path = `logo-${Date.now()}.${ext}`;
+      const { error } = await supabase.storage.from("proofs").upload(path, file, { upsert: false });
+      if (error) throw error;
+      const { data } = supabase.storage.from("proofs").getPublicUrl(path);
+      setLogoUrl(data.publicUrl);
+      persist(leads, clients, generalTasks, checkins, roles, profiles, data.publicUrl);
+      logAudit(`updated the CRM logo`);
+    } catch (err) {
+      setToast("Logo upload failed — try a smaller image.");
+      setTimeout(() => setToast(""), 3500);
+    }
+    setUploadingLogo(false);
+    e.target.value = "";
   };
 
   const openAdd = (type) => {
@@ -312,12 +379,69 @@ export default function NexifyCRM() {
   };
 
   const openTaskModal = () => {
+    setTaskEditId(null);
     setTaskForm({ clientId: "general", type: "Call", title: "", description: "", due: todayStr(), dueTime: "", priority: "Medium", assignee: session?.user?.email || "" });
     setTaskModal(true);
   };
 
+  const openEditTask = (t) => {
+    setTaskEditId({ clientId: t.clientId, taskId: t.id });
+    setTaskForm({
+      clientId: t.clientId === "general" ? "general" : String(t.clientId),
+      type: t.type || "Call", title: t.title || t.text || "", description: t.description || "",
+      due: t.due || "", dueTime: t.dueTime || "", priority: t.priority || "Medium", assignee: t.assignee || "",
+    });
+    setTaskModal(true);
+  };
+
+  const deleteAnyTask = (clientId, taskId) => {
+    if (clientId === "general") {
+      const newGeneral = generalTasks.filter((t) => t.id !== taskId);
+      setGeneralTasks(newGeneral);
+      persist(leads, clients, newGeneral);
+    } else {
+      const newClients = clients.map((c) => (c.id === clientId ? { ...c, tasks: (c.tasks || []).filter((t) => t.id !== taskId) } : c));
+      setClients(newClients);
+      persist(leads, newClients);
+    }
+    logAudit(`deleted a task`);
+  };
+
   const createTask = () => {
     if (!taskForm.title.trim()) return;
+    // EDIT MODE: update existing task in place (Executives)
+    if (taskEditId) {
+      const fields = {
+        title: taskForm.title.trim(), type: taskForm.type, description: taskForm.description.trim(),
+        due: taskForm.due, dueTime: taskForm.dueTime, priority: taskForm.priority, assignee: taskForm.assignee,
+      };
+      // Remove from old location, add to new (in case client association changed)
+      const old = taskEditId;
+      // strip from old
+      let g = generalTasks, cl = clients, moved = null;
+      if (old.clientId === "general") {
+        moved = generalTasks.find((t) => t.id === old.taskId);
+        g = generalTasks.filter((t) => t.id !== old.taskId);
+      } else {
+        const oc = clients.find((c) => c.id === old.clientId);
+        moved = (oc?.tasks || []).find((t) => t.id === old.taskId);
+        cl = clients.map((c) => (c.id === old.clientId ? { ...c, tasks: (c.tasks || []).filter((t) => t.id !== old.taskId) } : c));
+      }
+      const updated = { ...(moved || { id: old.taskId, done: false }), ...fields };
+      if (!taskForm.clientId || taskForm.clientId === "general") {
+        g = [...g, updated];
+      } else {
+        const cid = Number(taskForm.clientId);
+        cl = cl.map((c) => (c.id === cid ? { ...c, tasks: [...(c.tasks || []), updated] } : c));
+      }
+      setGeneralTasks(g);
+      setClients(cl);
+      persist(leads, cl, g);
+      logAudit(`edited task "${fields.title}"`);
+      setTaskModal(false);
+      setTaskEditId(null);
+      return;
+    }
     const newTask = {
       id: Date.now(),
       title: taskForm.title.trim(),
@@ -686,7 +810,13 @@ export default function NexifyCRM() {
   const usedNiches = [...new Set(leads.map((l) => l.category).filter(Boolean))].sort();
   const usedOwners = [...new Set(leads.map((l) => l.owner).filter(Boolean))].sort();
   const teamMembers = [...new Set([...(leads.map((l) => l.owner)), ...(clients.map((c) => c.owner)), session?.user?.email].filter(Boolean))].sort();
-  const ownerName = (email) => (email ? email.split("@")[0] : "Unassigned");
+  const ownerName = (email) => {
+    if (!email) return "Unassigned";
+    const p = profiles[email];
+    if (p && p.name) return p.name;
+    return email.split("@")[0];
+  };
+  const avatarOf = (email) => (email && profiles[email] && profiles[email].avatar) || "";
 
   const filteredLeads = leads.filter((l) => {
     const q = search.toLowerCase();
@@ -723,7 +853,7 @@ export default function NexifyCRM() {
   const myEmail = session?.user?.email || "";
   const myRole = roles[myEmail] || (myEmail === SUPER_ADMIN ? "Executive" : "Member");
   const isExec = myRole === "Executive";
-  const knownPeople = [...new Set([...teamMembers, ...checkins.map((c) => c.email), ...Object.keys(roles)].filter(Boolean))].sort();
+  const knownPeople = [...new Set([...teamMembers, ...checkins.map((c) => c.email), ...Object.keys(roles), ...Object.keys(profiles)].filter(Boolean))].sort();
   const visibleTasks = allTasks.filter((t) => {
     if (taskTypeFilter === "All") return true;
     if (taskTypeFilter === "Mine") return t.assignee === myEmail;
@@ -968,7 +1098,17 @@ export default function NexifyCRM() {
       <header className="bg-white border-b border-gray-200">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-semibold text-sm">N</div>
+            {logoUrl ? (
+              <img src={logoUrl} alt="logo" className="w-9 h-9 rounded-lg object-cover" />
+            ) : (
+              <div className="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-semibold text-sm">N</div>
+            )}
+            {myEmail === SUPER_ADMIN && (
+              <label className="text-xs text-gray-400 hover:text-indigo-600 cursor-pointer" title="Upload CRM logo">
+                {uploadingLogo ? "…" : "✎"}
+                <input type="file" accept="image/*" onChange={uploadLogo} className="hidden" disabled={uploadingLogo} />
+              </label>
+            )}
             <div>
               <h1 className="text-base font-semibold text-gray-900 leading-tight">Nexify CRM</h1>
               <p className="text-xs text-emerald-600 flex items-center gap-1"><Users size={11} /> Shared team workspace</p>
@@ -978,9 +1118,12 @@ export default function NexifyCRM() {
             {saveState === "saving" && <span className="text-xs text-gray-400">Saving…</span>}
             {saveState === "saved" && <span className="text-xs text-emerald-600">Saved</span>}
             {saveState === "error" && <span className="text-xs text-red-500">Save failed</span>}
-            <span className="text-xs text-gray-400 hidden md:inline">{session?.user?.email}</span>
             <button onClick={exportExcel} title="Export all data to Excel" className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 text-gray-600 rounded-lg text-sm hover:bg-gray-50 transition">
               <Download size={14} /> Export
+            </button>
+            <button onClick={openProfile} title="My profile" className="flex items-center gap-1.5 px-2 py-1.5 border border-gray-200 text-gray-600 rounded-lg text-sm hover:bg-gray-50 transition">
+              {avatarOf(myEmail) ? <img src={avatarOf(myEmail)} alt="me" className="w-5 h-5 rounded-full object-cover" /> : <span className="w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-xs font-semibold">{ownerName(myEmail).slice(0, 1).toUpperCase()}</span>}
+              <span className="hidden md:inline">{ownerName(myEmail)}</span>
             </button>
             <button onClick={() => supabase.auth.signOut()} title="Sign out" className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 text-gray-600 rounded-lg text-sm hover:bg-gray-50 transition">
               <LogOut size={14} />
@@ -1645,6 +1788,12 @@ export default function NexifyCRM() {
                         {t.priority && <span className={`text-xs px-1.5 py-0.5 rounded border shrink-0 ${PRIORITY_COLORS[t.priority] || ""}`}>{t.priority}</span>}
                         {t.assignee && <span className="text-xs text-gray-400 flex items-center gap-1"><Users size={10} />{ownerName(t.assignee)}</span>}
                         <span className="ml-auto text-xs text-gray-400 shrink-0">{t.due}{t.dueTime ? ` ${t.dueTime}` : ""}</span>
+                        {isExec && t.kind !== "followup" && (
+                          <span className="flex items-center gap-1 shrink-0">
+                            <button onClick={() => openEditTask(t)} title="Edit task" className="p-1 text-gray-300 hover:text-indigo-600 transition"><Pencil size={13} /></button>
+                            <button onClick={() => deleteAnyTask(t.clientId, t.id)} title="Delete task" className="p-1 text-gray-300 hover:text-red-500 transition"><Trash2 size={13} /></button>
+                          </span>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1789,8 +1938,8 @@ export default function NexifyCRM() {
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setTaskModal(false)}>
           <div className="bg-white rounded-2xl w-full max-w-lg overflow-y-auto p-6" style={{ maxHeight: "88vh" }} onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-5">
-              <h2 className="text-base font-semibold text-gray-900">New task</h2>
-              <button onClick={() => setTaskModal(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+              <h2 className="text-base font-semibold text-gray-900">{taskEditId ? "Edit task" : "New task"}</h2>
+              <button onClick={() => { setTaskModal(false); setTaskEditId(null); }} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
             </div>
             <div className="space-y-3">
               <div>
@@ -1834,15 +1983,44 @@ export default function NexifyCRM() {
               </div>
               <div>
                 <label className={labelCls}>Assignee</label>
-                <input className={inputCls} list="assignee-list" value={taskForm.assignee} onChange={(e) => setTaskForm({ ...taskForm, assignee: e.target.value })} placeholder="defaults to you" />
-                <datalist id="assignee-list">
-                  {teamMembers.map((m) => <option key={m} value={m} />)}
-                </datalist>
+                <select className={inputCls} value={taskForm.assignee} onChange={(e) => setTaskForm({ ...taskForm, assignee: e.target.value })}>
+                  <option value="">Unassigned</option>
+                  {knownPeople.map((m) => <option key={m} value={m}>{ownerName(m)}{m === myEmail ? " (you)" : ""}</option>)}
+                </select>
               </div>
             </div>
             <div className="flex justify-end gap-2 mt-5">
               <button onClick={() => setTaskModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">Cancel</button>
-              <button onClick={createTask} disabled={!taskForm.title.trim()} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition disabled:opacity-50">Create task</button>
+              <button onClick={createTask} disabled={!taskForm.title.trim()} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition disabled:opacity-50">{taskEditId ? "Save changes" : "Create task"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {profileModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setProfileModal(false)}>
+          <div className="bg-white rounded-2xl w-full max-w-sm p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="text-base font-semibold text-gray-900">My profile</h2>
+              <button onClick={() => setProfileModal(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+            </div>
+            <div className="flex flex-col items-center mb-4">
+              {profileForm.avatar ? (
+                <img src={profileForm.avatar} alt="avatar" className="w-20 h-20 rounded-full object-cover mb-2" />
+              ) : (
+                <div className="w-20 h-20 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-2xl font-semibold mb-2">{(profileForm.name || ownerName(myEmail)).slice(0, 1).toUpperCase()}</div>
+              )}
+              <label className="text-xs text-indigo-600 hover:text-indigo-700 cursor-pointer">
+                {uploadingAvatar ? "Uploading…" : "Upload photo"}
+                <input type="file" accept="image/*" onChange={uploadAvatar} className="hidden" disabled={uploadingAvatar} />
+              </label>
+            </div>
+            <label className={labelCls}>Display name</label>
+            <input className={inputCls} value={profileForm.name} onChange={(e) => setProfileForm({ ...profileForm, name: e.target.value })} placeholder="e.g. Parvez" />
+            <p className="text-xs text-gray-400 mt-1">{myEmail}</p>
+            <div className="flex justify-end gap-2 mt-5">
+              <button onClick={() => setProfileModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">Cancel</button>
+              <button onClick={saveProfile} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition">Save</button>
             </div>
           </div>
         </div>
