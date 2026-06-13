@@ -18,6 +18,8 @@ const SERVICES = ["SEO", "Social Media Management", "Web Development", "Paid Ads
 const SOURCES = ["Cold Outreach", "LinkedIn", "Referral", "Website", "WhatsApp", "Clutch", "Other"];
 const NICHES = ["Education", "Travel & Tourism", "F&B / Restaurant", "E-commerce", "Real Estate", "Healthcare", "Fashion & Apparel", "Manufacturing", "Professional Services", "Fitness & Wellness", "Technology", "Other"];
 const TASK_TYPES = ["Call", "Email", "LinkedIn", "Meeting", "Other"];
+// The super admin is always an Executive and can never be locked out.
+const SUPER_ADMIN = "parvezmohammed2024@gmail.com";
 const PRIORITIES = ["Low", "Medium", "High"];
 const PRIORITY_COLORS = { "Low": "bg-gray-100 text-gray-500 border-gray-200", "Medium": "bg-amber-50 text-amber-700 border-amber-200", "High": "bg-red-50 text-red-600 border-red-200" };
 
@@ -85,6 +87,8 @@ export default function NexifyCRM() {
   const [completing, setCompleting] = useState(null); // { clientId, taskId }
   const [proofLink, setProofLink] = useState("");
   const [proofNote, setProofNote] = useState("");
+  const [proofImage, setProofImage] = useState("");
+  const [uploadingProof, setUploadingProof] = useState(false);
   const [taskTypeFilter, setTaskTypeFilter] = useState("All");
   const [taskDue, setTaskDue] = useState("");
   const [payMonth, setPayMonth] = useState(todayStr().slice(0, 7));
@@ -95,13 +99,35 @@ export default function NexifyCRM() {
   const [session, setSession] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [auditLog, setAuditLog] = useState([]);
+  const [generalTasks, setGeneralTasks] = useState([]);
+  const [checkins, setCheckins] = useState([]);
+  const [roles, setRoles] = useState({});
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatText, setChatText] = useState("");
 
-  const loadData = async () => {
+  const loadData = async (email) => {
     try {
       const { data } = await supabase.from("crm_data").select("data").eq("id", 1).single();
-      const d = (data && data.data) || { leads: [], clients: [] };
-      setLeads((d.leads || []).map((l) => ({ activities: [], nextFollowUp: "", ...l })));
-      setClients((d.clients || []).map((c) => ({ tasks: [], payments: [], ...c })));
+      const d = (data && data.data) || {};
+      const L = (d.leads || []).map((l) => ({ activities: [], nextFollowUp: "", ...l }));
+      const C = (d.clients || []).map((c) => ({ tasks: [], payments: [], ...c }));
+      const G = d.generalTasks || [];
+      const R = d.roles || {};
+      let CK = d.checkins || [];
+      setLeads(L);
+      setClients(C);
+      setGeneralTasks(G);
+      setRoles(R);
+      // Auto daily check-in: logging in once a day records the user's attendance
+      const today = todayStr();
+      if (email && !CK.some((c) => c.email === email && c.date === today)) {
+        CK = [...CK, { email, date: today }];
+        try {
+          await supabase.from("crm_data").update({ data: { leads: L, clients: C, generalTasks: G, roles: R, checkins: CK }, updated_at: new Date().toISOString() }).eq("id", 1);
+          await supabase.from("audit_log").insert({ user_email: email, action: `checked in for ${today}` });
+        } catch (e) {}
+      }
+      setCheckins(CK);
     } catch (e) {}
     setLoaded(true);
   };
@@ -117,14 +143,31 @@ export default function NexifyCRM() {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
       setAuthChecked(true);
-      if (data.session) { loadData(); loadAudit(); }
+      if (data.session) { loadData(data.session.user.email); loadAudit(); }
     });
     const { data: sub } = supabase.auth.onAuthStateChange((_e, sess) => {
       setSession(sess);
-      if (sess) { loadData(); loadAudit(); }
+      if (sess) { loadData(sess.user.email); loadAudit(); }
     });
     return () => sub.subscription.unsubscribe();
   }, []);
+
+  // Poll chat while on the Chat tab (works even without realtime enabled)
+  useEffect(() => {
+    if (tab !== "chat" || !session) return;
+    loadChat();
+    const iv = setInterval(loadChat, 4000);
+    return () => clearInterval(iv);
+  }, [tab, session]);
+
+  // Members can see everything except Leads and Clients — bounce them off those
+  useEffect(() => {
+    if (!session || !loaded) return;
+    const r = roles[myEmail] || (myEmail === SUPER_ADMIN ? "Executive" : "Member");
+    if (r !== "Executive" && ["leads", "clients", "team"].includes(tab)) {
+      setTab("dashboard");
+    }
+  }, [tab, roles, session, loaded, myEmail]);
 
 
   const callAI = async (prompt, maxTokens) => {
@@ -146,16 +189,41 @@ export default function NexifyCRM() {
     } catch (e) {}
   };
 
-  const persist = async (newLeads, newClients) => {
+  const persist = async (newLeads = leads, newClients = clients, newGeneral = generalTasks, newCheckins = checkins, newRoles = roles) => {
     try {
       setSaveState("saving");
-      const { error } = await supabase.from("crm_data").update({ data: { leads: newLeads, clients: newClients }, updated_at: new Date().toISOString() }).eq("id", 1);
+      const { error } = await supabase.from("crm_data").update({ data: { leads: newLeads, clients: newClients, generalTasks: newGeneral, checkins: newCheckins, roles: newRoles }, updated_at: new Date().toISOString() }).eq("id", 1);
       if (error) throw error;
       setSaveState("saved");
       setTimeout(() => setSaveState(""), 1500);
     } catch (e) {
       setSaveState("error");
     }
+  };
+
+  const loadChat = async () => {
+    try {
+      const { data } = await supabase.from("chat_messages").select("*").order("created_at", { ascending: true }).limit(200);
+      setChatMessages(data || []);
+    } catch (e) {}
+  };
+
+  const sendChat = async () => {
+    if (!chatText.trim()) return;
+    const email = session?.user?.email || "unknown";
+    const text = chatText.trim();
+    setChatText("");
+    try {
+      await supabase.from("chat_messages").insert({ user_email: email, text });
+      loadChat();
+    } catch (e) {}
+  };
+
+  const setUserRole = (email, role) => {
+    const newRoles = { ...roles, [email]: role };
+    setRoles(newRoles);
+    persist(leads, clients, generalTasks, checkins, newRoles);
+    logAudit(`set ${ownerName(email)}'s role to ${role}`);
   };
 
   const openAdd = (type) => {
@@ -243,13 +311,12 @@ export default function NexifyCRM() {
   };
 
   const openTaskModal = () => {
-    setTaskForm({ clientId: clients[0]?.id ? String(clients[0].id) : "", type: "Call", title: "", description: "", due: todayStr(), dueTime: "", priority: "Medium", assignee: session?.user?.email || "" });
+    setTaskForm({ clientId: "general", type: "Call", title: "", description: "", due: todayStr(), dueTime: "", priority: "Medium", assignee: session?.user?.email || "" });
     setTaskModal(true);
   };
 
   const createTask = () => {
-    if (!taskForm.clientId || !taskForm.title.trim()) return;
-    const cid = Number(taskForm.clientId);
+    if (!taskForm.title.trim()) return;
     const newTask = {
       id: Date.now(),
       title: taskForm.title.trim(),
@@ -261,11 +328,19 @@ export default function NexifyCRM() {
       assignee: taskForm.assignee || session?.user?.email || "",
       done: false,
     };
-    const client = clients.find((c) => c.id === cid);
-    const newClients = clients.map((c) => (c.id === cid ? { ...c, tasks: [...(c.tasks || []), newTask] } : c));
-    setClients(newClients);
-    persist(leads, newClients);
-    logAudit(`created ${taskForm.type} task "${newTask.title}" for ${client?.company || client?.name || "a client"}`);
+    if (!taskForm.clientId || taskForm.clientId === "general") {
+      const newGeneral = [...generalTasks, newTask];
+      setGeneralTasks(newGeneral);
+      persist(leads, clients, newGeneral);
+      logAudit(`created ${taskForm.type} general task "${newTask.title}"`);
+    } else {
+      const cid = Number(taskForm.clientId);
+      const client = clients.find((c) => c.id === cid);
+      const newClients = clients.map((c) => (c.id === cid ? { ...c, tasks: [...(c.tasks || []), newTask] } : c));
+      setClients(newClients);
+      persist(leads, newClients);
+      logAudit(`created ${taskForm.type} task "${newTask.title}" for ${client?.company || client?.name || "a client"}`);
+    }
     setTaskModal(false);
   };
 
@@ -283,11 +358,19 @@ export default function NexifyCRM() {
 
   // Completing a task requires proof of work; un-completing is instant.
   const toggleTask = (clientId, taskId) => {
+    if (clientId === "general") {
+      const task = generalTasks.find((t) => t.id === taskId);
+      if (task && !task.done) { setProofLink(""); setProofNote(""); setProofImage(""); setCompleting({ clientId, taskId }); return; }
+      const newGeneral = generalTasks.map((t) => (t.id === taskId ? { ...t, done: false, proofLink: "", proofNote: "", completedAt: null, completedBy: null } : t));
+      setGeneralTasks(newGeneral);
+      persist(leads, clients, newGeneral);
+      return;
+    }
     const client = clients.find((c) => c.id === clientId);
     const task = (client?.tasks || []).find((t) => t.id === taskId);
     if (task && !task.done) {
       setProofLink("");
-      setProofNote("");
+      setProofNote(""); setProofImage("");
       setCompleting({ clientId, taskId });
       return;
     }
@@ -298,21 +381,49 @@ export default function NexifyCRM() {
     persist(leads, newClients);
   };
 
+  const uploadProofImage = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingProof(true);
+    try {
+      const ext = (file.name.split(".").pop() || "png").toLowerCase();
+      const path = `proof-${Date.now()}.${ext}`;
+      const { error } = await supabase.storage.from("proofs").upload(path, file, { upsert: false });
+      if (error) throw error;
+      const { data } = supabase.storage.from("proofs").getPublicUrl(path);
+      setProofImage(data.publicUrl);
+    } catch (err) {
+      setToast("Image upload failed — you can still use a link or note.");
+      setTimeout(() => setToast(""), 3500);
+    }
+    setUploadingProof(false);
+    e.target.value = "";
+  };
+
   const confirmComplete = () => {
     if (!completing) return;
-    if (!proofLink.trim() && !proofNote.trim()) return; // require some proof
+    if (!proofLink.trim() && !proofNote.trim() && !proofImage) return; // require some proof
     const { clientId, taskId } = completing;
-    const client = clients.find((c) => c.id === clientId);
-    const task = (client?.tasks || []).find((t) => t.id === taskId);
-    const newClients = clients.map((c) =>
-      c.id === clientId ? { ...c, tasks: (c.tasks || []).map((t) => (t.id === taskId ? { ...t, done: true, proofLink: proofLink.trim(), proofNote: proofNote.trim(), completedAt: new Date().toISOString(), completedBy: session?.user?.email || "" } : t)) } : c
-    );
-    setClients(newClients);
-    persist(leads, newClients);
-    logAudit(`completed task "${task?.title || task?.text || ""}"${proofLink.trim() ? ` (proof: ${proofLink.trim()})` : ""}`);
+    const patch = (t) => ({ ...t, done: true, proofLink: proofLink.trim(), proofNote: proofNote.trim(), proofImage, completedAt: new Date().toISOString(), completedBy: session?.user?.email || "" });
+    if (clientId === "general") {
+      const task = generalTasks.find((t) => t.id === taskId);
+      const newGeneral = generalTasks.map((t) => (t.id === taskId ? patch(t) : t));
+      setGeneralTasks(newGeneral);
+      persist(leads, clients, newGeneral);
+      logAudit(`completed general task "${task?.title || ""}"${proofLink.trim() ? ` (proof: ${proofLink.trim()})` : ""}`);
+    } else {
+      const client = clients.find((c) => c.id === clientId);
+      const task = (client?.tasks || []).find((t) => t.id === taskId);
+      const newClients = clients.map((c) =>
+        c.id === clientId ? { ...c, tasks: (c.tasks || []).map((t) => (t.id === taskId ? patch(t) : t)) } : c
+      );
+      setClients(newClients);
+      persist(leads, newClients);
+      logAudit(`completed task "${task?.title || task?.text || ""}"${proofLink.trim() ? ` (proof: ${proofLink.trim()})` : ""}`);
+    }
     setCompleting(null);
     setProofLink("");
-    setProofNote("");
+    setProofNote(""); setProofImage("");
   };
 
   const deleteTask = (clientId, taskId) => {
@@ -602,12 +713,16 @@ export default function NexifyCRM() {
   // ---- All tasks (client tasks + lead follow-ups) ----
   const allTasks = [];
   clients.forEach((c) => (c.tasks || []).forEach((t) => allTasks.push({ ...t, kind: "task", title: t.title || t.text, type: t.type || "Other", who: c.company || c.name, clientId: c.id })));
+  generalTasks.forEach((t) => allTasks.push({ ...t, kind: "general", title: t.title || t.text, type: t.type || "Other", who: "General", clientId: "general" }));
   leads.forEach((l) => {
     if (l.nextFollowUp && l.stage !== "Closed Won" && l.stage !== "Closed Lost") {
       allTasks.push({ id: "f" + l.id, title: "Follow up", type: "Follow-up", due: l.nextFollowUp, done: false, kind: "followup", who: l.company || l.name, assignee: l.owner, leadId: l.id });
     }
   });
   const myEmail = session?.user?.email || "";
+  const myRole = roles[myEmail] || (myEmail === SUPER_ADMIN ? "Executive" : "Member");
+  const isExec = myRole === "Executive";
+  const knownPeople = [...new Set([...teamMembers, ...checkins.map((c) => c.email), ...Object.keys(roles)].filter(Boolean))].sort();
   const visibleTasks = allTasks.filter((t) => {
     if (taskTypeFilter === "All") return true;
     if (taskTypeFilter === "Mine") return t.assignee === myEmail;
@@ -869,15 +984,17 @@ export default function NexifyCRM() {
             <button onClick={() => supabase.auth.signOut()} title="Sign out" className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 text-gray-600 rounded-lg text-sm hover:bg-gray-50 transition">
               <LogOut size={14} />
             </button>
-            <nav className="flex bg-gray-100 rounded-lg p-1">
+            <nav className="flex bg-gray-100 rounded-lg p-1 flex-wrap">
               {[
-                { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-                { id: "leads", label: "Leads", icon: Target },
-                { id: "clients", label: "Clients", icon: Briefcase },
-                { id: "deals", label: "Deals", icon: TrendingUp },
-                { id: "tasks", label: "Tasks", icon: ListChecks },
-                { id: "history", label: "History", icon: History },
-              ].map((t) => (
+                { id: "dashboard", label: "Dashboard", icon: LayoutDashboard, exec: false },
+                { id: "leads", label: "Leads", icon: Target, exec: true },
+                { id: "clients", label: "Clients", icon: Briefcase, exec: true },
+                { id: "deals", label: "Deals", icon: TrendingUp, exec: false },
+                { id: "tasks", label: "Tasks", icon: ListChecks, exec: false },
+                { id: "chat", label: "Chat", icon: MessageCircle, exec: false },
+                { id: "history", label: "History", icon: History, exec: true },
+                { id: "team", label: "Team", icon: Users, exec: true },
+              ].filter((t) => isExec || !t.exec).map((t) => (
                 <button
                   key={t.id}
                   onClick={() => { setTab(t.id); setSearch(""); }}
@@ -1460,13 +1577,30 @@ export default function NexifyCRM() {
 
         {tab === "tasks" && (
           <div>
+            <div className="bg-white rounded-xl border border-gray-200 p-5 mb-5">
+              <h2 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-2"><Check size={15} className="text-emerald-600" /> Daily check-in</h2>
+              <p className="text-xs text-gray-400 mb-3">Logging in once a day automatically checks you in. Here's today ({todayStr()}):</p>
+              <div className="flex flex-wrap gap-2">
+                {[...new Set([...teamMembers, ...checkins.map((c) => c.email)])].filter(Boolean).map((m) => {
+                  const inToday = checkins.some((c) => c.email === m && c.date === todayStr());
+                  return (
+                    <span key={m} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border ${inToday ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-gray-50 text-gray-400 border-gray-200"}`}>
+                      {inToday ? <Check size={11} /> : <Clock size={11} />}
+                      {ownerName(m)}{inToday ? "" : " — not yet"}
+                    </span>
+                  );
+                })}
+                {checkins.length === 0 && <span className="text-xs text-gray-400">No check-ins recorded yet.</span>}
+              </div>
+            </div>
+
             <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
               <div className="flex flex-wrap gap-1.5">
                 {["All", "Mine", ...TASK_TYPES].map((f) => (
                   <button key={f} onClick={() => setTaskTypeFilter(f)} className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${taskTypeFilter === f ? "bg-indigo-600 text-white" : "bg-white border border-gray-200 text-gray-600 hover:bg-gray-50"}`}>{f}</button>
                 ))}
               </div>
-              <button onClick={openTaskModal} disabled={clients.length === 0} title={clients.length === 0 ? "Add a client first" : ""} className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition disabled:opacity-50">
+              <button onClick={openTaskModal} className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition">
                 <Plus size={15} /> Create task
               </button>
             </div>
@@ -1530,12 +1664,13 @@ export default function NexifyCRM() {
                           <span className="text-gray-500 line-through">{t.title}</span>
                           <span className="text-xs text-gray-400">· {t.who}</span>
                         </div>
-                        {(t.proofNote || t.proofLink) && (
+                        {(t.proofNote || t.proofLink || t.proofImage) && (
                           <div className="mt-1 text-xs bg-emerald-50 border border-emerald-100 rounded-md px-2 py-1 inline-block">
                             <span className="text-emerald-700 font-medium">Proof: </span>
                             {t.proofNote && <span className="text-gray-700">{t.proofNote} </span>}
                             {t.proofLink && <button onClick={() => openExternal(t.proofLink.startsWith("http") ? t.proofLink : `https://${t.proofLink}`, "Proof")} className="text-indigo-600 underline">view link</button>}
                             {t.completedBy && <span className="text-gray-400"> — {ownerName(t.completedBy)}</span>}
+                            {t.proofImage && <div className="mt-1"><img src={t.proofImage} alt="proof" className="h-20 rounded-lg border border-gray-200 cursor-pointer" onClick={() => openExternal(t.proofImage, "Proof image")} /></div>}
                           </div>
                         )}
                       </div>
@@ -1545,6 +1680,83 @@ export default function NexifyCRM() {
               </div>
             )}
             <p className="text-xs text-gray-400">Create tasks tied to a client, assign them to a teammate, and capture proof of work on completion. Follow-ups come from lead follow-up dates.</p>
+          </div>
+        )}
+
+        {tab === "chat" && (
+          <div className="max-w-3xl mx-auto">
+            <div className="bg-white rounded-xl border border-gray-200 flex flex-col" style={{ height: "70vh" }}>
+              <div className="px-5 py-3 border-b border-gray-100">
+                <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2"><MessageCircle size={15} className="text-indigo-600" /> Team chat</h2>
+                <p className="text-xs text-gray-400">Type @ to mention a teammate. Messages refresh automatically.</p>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                {chatMessages.length === 0 ? (
+                  <p className="text-xs text-gray-400 text-center mt-8">No messages yet. Say hello 👋</p>
+                ) : (
+                  chatMessages.map((m) => {
+                    const mine = m.user_email === myEmail;
+                    const mentionsMe = (m.text || "").toLowerCase().includes("@" + ownerName(myEmail).toLowerCase());
+                    return (
+                      <div key={m.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+                        <div className={`max-w-[75%] rounded-2xl px-3 py-2 ${mine ? "bg-indigo-600 text-white" : mentionsMe ? "bg-amber-50 border border-amber-200" : "bg-gray-100"}`}>
+                          {!mine && <div className="text-xs font-semibold text-indigo-700 mb-0.5">{ownerName(m.user_email)}</div>}
+                          <div className={`text-sm whitespace-pre-wrap break-words ${mine ? "text-white" : "text-gray-800"}`}>
+                            {(m.text || "").split(/(@\w+)/g).map((part, i) =>
+                              part.startsWith("@") ? <span key={i} className={mine ? "font-semibold underline" : "font-semibold text-indigo-600"}>{part}</span> : part
+                            )}
+                          </div>
+                          <div className={`text-xs mt-0.5 ${mine ? "text-indigo-200" : "text-gray-400"}`}>{new Date(m.created_at).toLocaleString()}</div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+              <div className="border-t border-gray-100 p-3">
+                <div className="flex flex-wrap gap-1 mb-2">
+                  {knownPeople.filter((p) => p !== myEmail).map((p) => (
+                    <button key={p} onClick={() => setChatText((t) => `${t}@${ownerName(p)} `)} className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 hover:bg-indigo-50 hover:text-indigo-600 transition">@{ownerName(p)}</button>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <input value={chatText} onChange={(e) => setChatText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendChat()} placeholder="Type a message…" className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                  <button onClick={sendChat} disabled={!chatText.trim()} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition disabled:opacity-50">Send</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === "team" && isExec && (
+          <div>
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <h2 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-2"><Users size={15} /> Team & roles</h2>
+              <p className="text-xs text-gray-400 mb-4">Executives see everything. Members can only use Tasks and Chat. People appear here once they've logged in or been assigned a lead.</p>
+              {knownPeople.length === 0 ? (
+                <p className="text-xs text-gray-400">No team members yet.</p>
+              ) : (
+                <div className="space-y-2">
+                  {knownPeople.map((p) => {
+                    const r = roles[p] || (p === SUPER_ADMIN ? "Executive" : "Member");
+                    const locked = p === SUPER_ADMIN;
+                    return (
+                      <div key={p} className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
+                        <span className="flex items-center gap-2 text-sm text-gray-700">
+                          <span className="w-7 h-7 rounded-full bg-indigo-50 text-indigo-700 flex items-center justify-center text-xs font-semibold">{ownerName(p).slice(0, 2).toUpperCase()}</span>
+                          {ownerName(p)} <span className="text-xs text-gray-400">{p}</span>
+                          {locked && <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-400">admin</span>}
+                        </span>
+                        <select disabled={locked} value={r} onChange={(e) => setUserRole(p, e.target.value)} className="px-3 py-1.5 border border-gray-200 rounded-lg text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60">
+                          <option>Executive</option>
+                          <option>Member</option>
+                        </select>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -1581,9 +1793,9 @@ export default function NexifyCRM() {
             </div>
             <div className="space-y-3">
               <div>
-                <label className={labelCls}>Associated with (client) *</label>
+                <label className={labelCls}>Associated with</label>
                 <select className={inputCls} value={taskForm.clientId} onChange={(e) => setTaskForm({ ...taskForm, clientId: e.target.value })}>
-                  <option value="">Select a client…</option>
+                  <option value="general">— General / internal task —</option>
                   {clients.map((c) => <option key={c.id} value={c.id}>{c.company || c.name}</option>)}
                 </select>
               </div>
@@ -1629,7 +1841,7 @@ export default function NexifyCRM() {
             </div>
             <div className="flex justify-end gap-2 mt-5">
               <button onClick={() => setTaskModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">Cancel</button>
-              <button onClick={createTask} disabled={!taskForm.clientId || !taskForm.title.trim()} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition disabled:opacity-50">Create task</button>
+              <button onClick={createTask} disabled={!taskForm.title.trim()} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition disabled:opacity-50">Create task</button>
             </div>
           </div>
         </div>
@@ -1642,7 +1854,7 @@ export default function NexifyCRM() {
               <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2"><Check size={17} className="text-emerald-600" /> Complete task</h2>
               <button onClick={() => setCompleting(null)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
             </div>
-            <p className="text-xs text-gray-500 mb-4">Attach proof of work — a link and/or a short note. At least one is required.</p>
+            <p className="text-xs text-gray-500 mb-4">Attach proof of work — a link, a note, and/or an image. At least one is required.</p>
             <div className="space-y-3">
               <div>
                 <label className={labelCls}>Proof link (URL)</label>
@@ -1652,10 +1864,25 @@ export default function NexifyCRM() {
                 <label className={labelCls}>Note</label>
                 <textarea className={inputCls} rows={2} value={proofNote} onChange={(e) => setProofNote(e.target.value)} placeholder="e.g. Posted the May report, tagged the client" />
               </div>
+              <div>
+                <label className={labelCls}>Image (screenshot / photo)</label>
+                {proofImage ? (
+                  <div className="flex items-center gap-2">
+                    <img src={proofImage} alt="proof" className="h-16 w-16 object-cover rounded-lg border border-gray-200" />
+                    <button onClick={() => setProofImage("")} className="text-xs text-red-500 hover:text-red-600">Remove</button>
+                  </div>
+                ) : (
+                  <label className={`flex items-center justify-center gap-2 px-3 py-2 border border-dashed border-gray-300 rounded-lg text-sm cursor-pointer hover:border-indigo-400 transition ${uploadingProof ? "opacity-60" : ""}`}>
+                    <Upload size={15} className="text-gray-400" />
+                    {uploadingProof ? "Uploading…" : "Add image"}
+                    <input type="file" accept="image/*" onChange={uploadProofImage} className="hidden" disabled={uploadingProof} />
+                  </label>
+                )}
+              </div>
             </div>
             <div className="flex justify-end gap-2 mt-5">
               <button onClick={() => setCompleting(null)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">Cancel</button>
-              <button onClick={confirmComplete} disabled={!proofLink.trim() && !proofNote.trim()} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition disabled:opacity-50">Mark complete</button>
+              <button onClick={confirmComplete} disabled={!proofLink.trim() && !proofNote.trim() && !proofImage} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition disabled:opacity-50">Mark complete</button>
             </div>
           </div>
         </div>
