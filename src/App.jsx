@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Users, Briefcase, TrendingUp, Plus, X, Pencil, Trash2, Search, LayoutDashboard, Target, Phone, Mail, Globe, ChevronDown, ChevronUp, Upload, FileSpreadsheet, Download, MessageCircle, Clock, Flame, CalendarClock, ListChecks, Banknote, FileText, AlertTriangle, Columns, List, Check, Sparkles, Link } from "lucide-react";
 import * as XLSX from "xlsx";
 import { supabase } from "./supabaseClient";
-import { LogOut, History, Lock } from "lucide-react";
+import { LogOut, History, Lock, Bell } from "lucide-react";
 
 const STAGES = ["New", "Contacted", "Proposal Sent", "Negotiating", "Closed Won", "Closed Lost"];
 const STAGE_PROB = { "New": 0.1, "Contacted": 0.25, "Proposal Sent": 0.5, "Negotiating": 0.75, "Closed Won": 1, "Closed Lost": 0 };
@@ -113,6 +113,10 @@ export default function NexifyCRM() {
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatText, setChatText] = useState("");
+  const [bellOpen, setBellOpen] = useState(false);
+  const [lastSeen, setLastSeen] = useState(() => {
+    try { return localStorage.getItem("nexify-bell-seen") || ""; } catch { return ""; }
+  });
 
   const loadData = async (email) => {
     try {
@@ -158,11 +162,11 @@ export default function NexifyCRM() {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
       setAuthChecked(true);
-      if (data.session) { loadData(data.session.user.email); loadAudit(); }
+      if (data.session) { loadData(data.session.user.email); loadAudit(); loadChat(); }
     });
     const { data: sub } = supabase.auth.onAuthStateChange((_e, sess) => {
       setSession(sess);
-      if (sess) { loadData(sess.user.email); loadAudit(); }
+      if (sess) { loadData(sess.user.email); loadAudit(); loadChat(); }
     });
     return () => sub.subscription.unsubscribe();
   }, []);
@@ -257,6 +261,51 @@ export default function NexifyCRM() {
     setTaskTypes(newTypes);
     persist(leads, clients, generalTasks, checkins, roles, profiles, logoUrl, newTypes);
     logAudit(`removed task type "${name}"`);
+  };
+
+  const sendEmail = async (to, subject, html) => {
+    try {
+      await fetch("/api/send-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to, subject, html }),
+      });
+    } catch (e) {}
+  };
+
+  const notifyAssignment = (task, clientLabel) => {
+    const to = task.assignee;
+    if (!to || to === myEmail) return;
+    const html = `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
+        <h2 style="color:#4f46e5;">New task assigned to you</h2>
+        <p style="color:#555;"><b>${(task.title || "").replace(/</g, "&lt;")}</b> (${task.type})</p>
+        <p style="color:#555;">For: ${clientLabel}${task.due ? ` &middot; Due: ${task.due}` : ""}${task.priority ? ` &middot; Priority: ${task.priority}` : ""}</p>
+        ${task.description ? `<p style="color:#777;">${task.description.replace(/</g, "&lt;")}</p>` : ""}
+        <p style="margin-top:20px;"><a href="https://nexify-crm.vercel.app" style="background:#4f46e5;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;">Open Nexify CRM</a></p>
+      </div>`;
+    sendEmail(to, `New task: ${task.title}`, html);
+  };
+
+  const sendRemindersNow = async () => {
+    const open = realTasks.filter((t) => !t.done && t.assignee);
+    const byUser = {};
+    open.forEach((t) => { (byUser[t.assignee] = byUser[t.assignee] || []).push(t); });
+    const emails = Object.keys(byUser);
+    if (!emails.length) { setToast("No pending tasks to remind about."); setTimeout(() => setToast(""), 3000); return; }
+    setToast(`Sending reminders to ${emails.length} member${emails.length !== 1 ? "s" : ""}…`);
+    for (const email of emails) {
+      const list = byUser[email].sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999"));
+      const rows = list.map((t) => {
+        const late = t.due && t.due < todayStr();
+        return `<tr><td style="padding:6px 10px;border-bottom:1px solid #eee;">${t.type}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;">${(t.title || "").replace(/</g, "&lt;")}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;">${t.who}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;color:${late ? "#dc2626" : "#666"};">${t.due || "—"}${late ? " (overdue)" : ""}</td></tr>`;
+      }).join("");
+      const html = `<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;"><h2 style="color:#4f46e5;">Hi ${ownerName(email)}, your task reminder</h2><p style="color:#555;">You have <b>${list.length}</b> open task${list.length !== 1 ? "s" : ""}.</p><table style="width:100%;border-collapse:collapse;font-size:14px;"><tbody>${rows}</tbody></table><p style="margin-top:20px;"><a href="https://nexify-crm.vercel.app" style="background:#4f46e5;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;">Open Nexify CRM</a></p></div>`;
+      await sendEmail(email, `Task reminder — ${list.length} open`, html);
+    }
+    logAudit(`sent task reminders to ${emails.length} member(s)`);
+    setToast(`Reminders sent to ${emails.length} member${emails.length !== 1 ? "s" : ""}.`);
+    setTimeout(() => setToast(""), 4000);
   };
 
   const openProfile = () => {
@@ -479,6 +528,7 @@ export default function NexifyCRM() {
       setGeneralTasks(newGeneral);
       persist(leads, clients, newGeneral);
       logAudit(`created ${taskForm.type} general task "${newTask.title}"`);
+      notifyAssignment(newTask, "General / internal");
     } else {
       const cid = Number(taskForm.clientId);
       const client = clients.find((c) => c.id === cid);
@@ -486,6 +536,7 @@ export default function NexifyCRM() {
       setClients(newClients);
       persist(leads, newClients);
       logAudit(`created ${taskForm.type} task "${newTask.title}" for ${client?.company || client?.name || "a client"}`);
+      notifyAssignment(newTask, client?.company || client?.name || "a client");
     }
     setTaskModal(false);
   };
@@ -892,6 +943,20 @@ export default function NexifyCRM() {
   const teamCompleted = realTasks.filter((t) => t.done).length;
   const teamOverdue = realTasks.filter((t) => !t.done && t.due && t.due < todayStr()).length;
   const teamPending = realTasks.filter((t) => !t.done && (!t.due || t.due >= todayStr())).length;
+
+  // ---- Notification bell (current user) ----
+  const myOpenTasks = realTasks.filter((t) => t.assignee === myEmail && !t.done);
+  const myDueToday = myOpenTasks.filter((t) => t.due === todayStr());
+  const myOverdue = myOpenTasks.filter((t) => t.due && t.due < todayStr());
+  const myMentions = chatMessages.filter((m) => m.user_email !== myEmail && (m.text || "").toLowerCase().includes("@" + ownerName(myEmail).toLowerCase()));
+  const newMentions = myMentions.filter((m) => !lastSeen || new Date(m.created_at) > new Date(lastSeen));
+  const bellCount = newMentions.length + myDueToday.length + myOverdue.length;
+  const openBell = () => {
+    setBellOpen((o) => !o);
+    const now = new Date().toISOString();
+    setLastSeen(now);
+    try { localStorage.setItem("nexify-bell-seen", now); } catch (e) {}
+  };
   const visibleTasks = allTasks.filter((t) => {
     if (taskTypeFilter === "All") return true;
     if (taskTypeFilter === "Mine") return t.assignee === myEmail;
@@ -1159,6 +1224,47 @@ export default function NexifyCRM() {
             <button onClick={exportExcel} title="Export all data to Excel" className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 text-gray-600 rounded-lg text-sm hover:bg-gray-50 transition">
               <Download size={14} /> Export
             </button>
+            <div className="relative">
+              <button onClick={openBell} title="Notifications" className="relative flex items-center px-2 py-1.5 border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 transition">
+                <Bell size={16} />
+                {bellCount > 0 && <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">{bellCount}</span>}
+              </button>
+              {bellOpen && (
+                <div className="absolute right-0 mt-2 w-80 bg-white rounded-xl border border-gray-200 shadow-lg z-50 p-3" style={{ maxHeight: "70vh", overflowY: "auto" }}>
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-sm font-semibold text-gray-900">Notifications</h3>
+                    <button onClick={() => setBellOpen(false)} className="text-gray-400 hover:text-gray-600"><X size={14} /></button>
+                  </div>
+                  {bellCount === 0 && newMentions.length === 0 && myOverdue.length === 0 && myDueToday.length === 0 && (
+                    <p className="text-xs text-gray-400 py-3 text-center">You're all caught up 🎉</p>
+                  )}
+                  {myOverdue.length > 0 && (
+                    <div className="mb-2">
+                      <p className="text-xs font-semibold text-red-600 mb-1">Overdue ({myOverdue.length})</p>
+                      {myOverdue.slice(0, 5).map((t) => (
+                        <button key={t.id} onClick={() => { setTab("tasks"); setBellOpen(false); }} className="block w-full text-left text-xs text-gray-700 py-1 px-2 rounded hover:bg-gray-50">{t.title} <span className="text-gray-400">· {t.who} · {t.due}</span></button>
+                      ))}
+                    </div>
+                  )}
+                  {myDueToday.length > 0 && (
+                    <div className="mb-2">
+                      <p className="text-xs font-semibold text-amber-600 mb-1">Due today ({myDueToday.length})</p>
+                      {myDueToday.slice(0, 5).map((t) => (
+                        <button key={t.id} onClick={() => { setTab("tasks"); setBellOpen(false); }} className="block w-full text-left text-xs text-gray-700 py-1 px-2 rounded hover:bg-gray-50">{t.title} <span className="text-gray-400">· {t.who}</span></button>
+                      ))}
+                    </div>
+                  )}
+                  {myMentions.length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold text-indigo-600 mb-1">Mentions</p>
+                      {myMentions.slice(-5).reverse().map((m) => (
+                        <button key={m.id} onClick={() => { setTab("chat"); setBellOpen(false); }} className="block w-full text-left text-xs text-gray-700 py-1 px-2 rounded hover:bg-gray-50"><b>{ownerName(m.user_email)}</b>: {(m.text || "").slice(0, 50)}</button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
             <button onClick={openProfile} title="My profile" className="flex items-center gap-1.5 px-2 py-1.5 border border-gray-200 text-gray-600 rounded-lg text-sm hover:bg-gray-50 transition">
               {avatarOf(myEmail) ? <img src={avatarOf(myEmail)} alt="me" className="w-5 h-5 rounded-full object-cover" /> : <span className="w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-xs font-semibold">{ownerName(myEmail).slice(0, 1).toUpperCase()}</span>}
               <span className="hidden md:inline">{ownerName(myEmail)}</span>
@@ -1968,6 +2074,12 @@ export default function NexifyCRM() {
 
         {tab === "reports" && isExec && (
           <div>
+            <div className="flex items-center justify-between mb-4">
+              <p className="text-xs text-gray-400">Team performance & task reminders</p>
+              <button onClick={sendRemindersNow} className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition">
+                <Mail size={15} /> Send reminders now
+              </button>
+            </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
               <div className="bg-white rounded-xl border border-gray-200 p-4">
                 <div className="flex items-center gap-2 text-gray-400 text-xs mb-2"><Check size={14} /> Total sign-ins</div>
