@@ -958,6 +958,8 @@ export default function NexifyCRM() {
     try { localStorage.setItem("nexify-bell-seen", now); } catch (e) {}
   };
   const visibleTasks = allTasks.filter((t) => {
+    // Members only ever see tasks assigned to them
+    if (!isExec && t.assignee !== myEmail) return false;
     if (taskTypeFilter === "All") return true;
     if (taskTypeFilter === "Mine") return t.assignee === myEmail;
     return t.type === taskTypeFilter;
@@ -1230,7 +1232,7 @@ export default function NexifyCRM() {
                 {bellCount > 0 && <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">{bellCount}</span>}
               </button>
               {bellOpen && (
-                <div className="absolute right-0 mt-2 w-80 bg-white rounded-xl border border-gray-200 shadow-lg z-50 p-3" style={{ maxHeight: "70vh", overflowY: "auto" }}>
+                <div className="absolute left-0 mt-2 w-80 max-w-[calc(100vw-2rem)] bg-white rounded-xl border border-gray-200 shadow-lg z-50 p-3" style={{ maxHeight: "70vh", overflowY: "auto" }}>
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-sm font-semibold text-gray-900">Notifications</h3>
                     <button onClick={() => setBellOpen(false)} className="text-gray-400 hover:text-gray-600"><X size={14} /></button>
@@ -1301,7 +1303,37 @@ export default function NexifyCRM() {
       <main className="max-w-6xl mx-auto px-6 py-6">
         {tab === "dashboard" && (
           <div>
-            {(overdue.length > 0 || dueToday.length > 0) && (
+            {(myOverdue.length > 0 || myDueToday.length > 0) ? (
+              <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4">
+                <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2 mb-3"><ListChecks size={15} className="text-indigo-600" /> My tasks — needs attention</h2>
+                <div className="space-y-1.5">
+                  {myOverdue.map((t) => (
+                    <div key={t.id} className="flex items-center gap-2 text-xs">
+                      <button onClick={() => toggleTask(t.clientId, t.id)} title="Mark complete" className="w-3.5 h-3.5 rounded border-2 border-gray-300 bg-white hover:border-emerald-500 shrink-0" />
+                      <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-medium shrink-0">Overdue</span>
+                      <span className="text-gray-800 font-medium">{t.title}</span>
+                      <span className="text-gray-400">· {t.who}</span>
+                      <span className="ml-auto text-red-500 shrink-0">{t.due}</span>
+                    </div>
+                  ))}
+                  {myDueToday.map((t) => (
+                    <div key={t.id} className="flex items-center gap-2 text-xs">
+                      <button onClick={() => toggleTask(t.clientId, t.id)} title="Mark complete" className="w-3.5 h-3.5 rounded border-2 border-gray-300 bg-white hover:border-emerald-500 shrink-0" />
+                      <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium shrink-0">Due today</span>
+                      <span className="text-gray-800 font-medium">{t.title}</span>
+                      <span className="text-gray-400">· {t.who}</span>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={() => setTab("tasks")} className="text-xs text-indigo-600 hover:underline mt-3">View all my tasks →</button>
+              </div>
+            ) : (
+              <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4">
+                <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2"><ListChecks size={15} className="text-emerald-600" /> My tasks</h2>
+                <p className="text-xs text-gray-400 mt-1">Nothing overdue or due today — you're on top of it. 🎉</p>
+              </div>
+            )}
+            {(overdue.length > 0 || dueToday.length > 0) && isExec && (
               <div className="grid md:grid-cols-2 gap-4 mb-4">
                 {overdue.length > 0 && (
                   <div className="bg-red-50 border border-red-200 rounded-xl p-4">
@@ -1922,10 +1954,10 @@ export default function NexifyCRM() {
                   <div className="space-y-2">
                     {group.items.map((t) => (
                       <div key={t.id} className="flex items-center gap-3 text-sm py-2 border-b border-gray-50 last:border-0">
-                        {t.kind === "task" ? (
-                          <button onClick={() => toggleTask(t.clientId, t.id)} title="Mark complete (asks for proof)" className="w-4 h-4 rounded border border-gray-300 bg-white hover:border-indigo-400 shrink-0" />
-                        ) : (
+                        {t.kind === "followup" ? (
                           <span className="w-4 h-4 rounded-full bg-amber-100 flex items-center justify-center shrink-0"><CalendarClock size={10} className="text-amber-600" /></span>
+                        ) : (
+                          <button onClick={() => toggleTask(t.clientId, t.id)} title="Mark complete (asks for proof)" className="w-4 h-4 rounded border-2 border-gray-300 bg-white hover:border-emerald-500 hover:bg-emerald-50 shrink-0" />
                         )}
                         <span className="text-xs px-1.5 py-0.5 rounded border bg-gray-50 text-gray-500 border-gray-200 shrink-0">{t.type}</span>
                         <span className="text-gray-800 font-medium">{t.title}</span>
