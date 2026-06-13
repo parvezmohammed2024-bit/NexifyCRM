@@ -163,11 +163,12 @@ export default function NexifyCRM() {
   // Members can see everything except Leads and Clients — bounce them off those
   useEffect(() => {
     if (!session || !loaded) return;
-    const r = roles[myEmail] || (myEmail === SUPER_ADMIN ? "Executive" : "Member");
+    const email = session?.user?.email || "";
+    const r = roles[email] || (email === SUPER_ADMIN ? "Executive" : "Member");
     if (r !== "Executive" && ["leads", "clients", "team"].includes(tab)) {
       setTab("dashboard");
     }
-  }, [tab, roles, session, loaded, myEmail]);
+  }, [tab, roles, session, loaded]);
 
 
   const callAI = async (prompt, maxTokens) => {
