@@ -107,6 +107,7 @@ export default function NexifyCRM() {
   const [logoUrl, setLogoUrl] = useState("");
   const [taskTypes, setTaskTypes] = useState(TASK_TYPES);
   const [newTypeText, setNewTypeText] = useState("");
+  const [goals, setGoals] = useState({ leadsTarget: 0, dealsTarget: 0 });
   const [profileModal, setProfileModal] = useState(false);
   const [profileForm, setProfileForm] = useState({ name: "", avatar: "" });
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
@@ -130,6 +131,7 @@ export default function NexifyCRM() {
       const P = d.profiles || {};
       const LOGO = d.logoUrl || "";
       const TT = (d.taskTypes && d.taskTypes.length) ? d.taskTypes : TASK_TYPES;
+      const GOALS = d.goals || { leadsTarget: 0, dealsTarget: 0 };
       let CK = d.checkins || [];
       setLeads(L);
       setClients(C);
@@ -138,12 +140,13 @@ export default function NexifyCRM() {
       setProfiles(P);
       setLogoUrl(LOGO);
       setTaskTypes(TT);
+      setGoals(GOALS);
       // Auto daily check-in: logging in once a day records the user's attendance
       const today = todayStr();
       if (email && !CK.some((c) => c.email === email && c.date === today)) {
         CK = [...CK, { email, date: today }];
         try {
-          await supabase.from("crm_data").update({ data: { leads: L, clients: C, generalTasks: G, roles: R, profiles: P, logoUrl: LOGO, taskTypes: TT, checkins: CK }, updated_at: new Date().toISOString() }).eq("id", 1);
+          await supabase.from("crm_data").update({ data: { leads: L, clients: C, generalTasks: G, roles: R, profiles: P, logoUrl: LOGO, taskTypes: TT, goals: GOALS, checkins: CK }, updated_at: new Date().toISOString() }).eq("id", 1);
           await supabase.from("audit_log").insert({ user_email: email, action: `checked in for ${today}` });
         } catch (e) {}
       }
@@ -210,10 +213,10 @@ export default function NexifyCRM() {
     } catch (e) {}
   };
 
-  const persist = async (newLeads = leads, newClients = clients, newGeneral = generalTasks, newCheckins = checkins, newRoles = roles, newProfiles = profiles, newLogo = logoUrl, newTaskTypes = taskTypes) => {
+  const persist = async (newLeads = leads, newClients = clients, newGeneral = generalTasks, newCheckins = checkins, newRoles = roles, newProfiles = profiles, newLogo = logoUrl, newTaskTypes = taskTypes, newGoals = goals) => {
     try {
       setSaveState("saving");
-      const { error } = await supabase.from("crm_data").update({ data: { leads: newLeads, clients: newClients, generalTasks: newGeneral, checkins: newCheckins, roles: newRoles, profiles: newProfiles, logoUrl: newLogo, taskTypes: newTaskTypes }, updated_at: new Date().toISOString() }).eq("id", 1);
+      const { error } = await supabase.from("crm_data").update({ data: { leads: newLeads, clients: newClients, generalTasks: newGeneral, checkins: newCheckins, roles: newRoles, profiles: newProfiles, logoUrl: newLogo, taskTypes: newTaskTypes, goals: newGoals }, updated_at: new Date().toISOString() }).eq("id", 1);
       if (error) throw error;
       setSaveState("saved");
       setTimeout(() => setSaveState(""), 1500);
@@ -262,6 +265,13 @@ export default function NexifyCRM() {
     setTaskTypes(newTypes);
     persist(leads, clients, generalTasks, checkins, roles, profiles, logoUrl, newTypes);
     logAudit(`removed task type "${name}"`);
+  };
+
+  const saveGoals = (leadsTarget, dealsTarget) => {
+    const newGoals = { leadsTarget: Math.max(0, parseInt(leadsTarget) || 0), dealsTarget: Math.max(0, parseInt(dealsTarget) || 0) };
+    setGoals(newGoals);
+    persist(leads, clients, generalTasks, checkins, roles, profiles, logoUrl, taskTypes, newGoals);
+    logAudit(`set monthly goal: ${newGoals.leadsTarget} leads, ${newGoals.dealsTarget} deals`);
   };
 
   const sendEmail = async (to, subject, html) => {
@@ -424,6 +434,7 @@ export default function NexifyCRM() {
       if (l.id !== id) return l;
       const upd = { ...l, stage };
       if (stage === "Proposal Sent" && !l.proposalDate) upd.proposalDate = todayStr();
+      if (stage === "Closed Won" && !l.wonAt) upd.wonAt = todayStr();
       upd.activities = [{ id: Date.now(), date: todayStr(), text: `Stage changed to ${stage}` }, ...(l.activities || [])];
       return upd;
     });
@@ -663,7 +674,7 @@ export default function NexifyCRM() {
       notes: lead.notes, tasks: [], payments: [],
     };
     const newClients = [newClient, ...clients];
-    const newLeads = leads.map((l) => (l.id === lead.id ? { ...l, stage: "Closed Won", activities: [{ id: Date.now(), date: todayStr(), text: "Deal won — converted to client" }, ...(l.activities || [])] } : l));
+    const newLeads = leads.map((l) => (l.id === lead.id ? { ...l, stage: "Closed Won", wonAt: l.wonAt || todayStr(), activities: [{ id: Date.now(), date: todayStr(), text: "Deal won — converted to client" }, ...(l.activities || [])] } : l));
     setClients(newClients);
     setLeads(newLeads);
     persist(newLeads, newClients);
@@ -944,6 +955,17 @@ export default function NexifyCRM() {
   const teamCompleted = realTasks.filter((t) => t.done).length;
   const teamOverdue = realTasks.filter((t) => !t.done && t.due && t.due < todayStr()).length;
   const teamPending = realTasks.filter((t) => !t.done && (!t.due || t.due >= todayStr())).length;
+
+  // ---- Monthly goal: new leads + deals won this month ----
+  const monthPrefix = todayStr().slice(0, 7); // "YYYY-MM"
+  const leadsThisMonth = leads.filter((l) => (l.createdAt || "").slice(0, 7) === monthPrefix).length;
+  const dealsWonThisMonth = leads.filter((l) => (l.wonAt || "").slice(0, 7) === monthPrefix).length;
+  const monthDate = new Date();
+  const daysInMonth = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0).getDate();
+  const daysLeft = daysInMonth - monthDate.getDate();
+  const leadsPct = goals.leadsTarget > 0 ? Math.min(100, Math.round((leadsThisMonth / goals.leadsTarget) * 100)) : 0;
+  const dealsPct = goals.dealsTarget > 0 ? Math.min(100, Math.round((dealsWonThisMonth / goals.dealsTarget) * 100)) : 0;
+  const hasGoal = goals.leadsTarget > 0 || goals.dealsTarget > 0;
 
   // ---- Notification bell (current user) ----
   const myOpenTasks = realTasks.filter((t) => t.assignee === myEmail && !t.done);
@@ -1310,6 +1332,42 @@ export default function NexifyCRM() {
       <main className="max-w-6xl mx-auto px-4 md:px-6 py-5 md:py-6 pb-24 md:pb-6">
         {tab === "dashboard" && (
           <div>
+            {hasGoal && (
+              <div className="bg-gradient-to-br from-indigo-600 to-violet-600 rounded-2xl p-5 md:p-6 mb-4 text-white">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-sm font-medium text-indigo-100 flex items-center gap-2"><Target size={15} /> This month's goal</h2>
+                  <span className="text-xs bg-white/20 rounded-full px-2.5 py-1">{daysLeft} day{daysLeft !== 1 ? "s" : ""} left</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                  {goals.leadsTarget > 0 && (
+                    <div>
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-4xl md:text-5xl font-bold">{leadsThisMonth}</span>
+                        <span className="text-xl text-indigo-200">/ {goals.leadsTarget}</span>
+                        <span className="text-sm text-indigo-100 ml-1">new leads</span>
+                      </div>
+                      <div className="h-2.5 bg-white/20 rounded-full mt-2 overflow-hidden">
+                        <div className="h-full bg-white rounded-full transition-all" style={{ width: `${leadsPct}%` }} />
+                      </div>
+                      <p className="text-xs text-indigo-100 mt-1">{leadsPct}% of target</p>
+                    </div>
+                  )}
+                  {goals.dealsTarget > 0 && (
+                    <div>
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-4xl md:text-5xl font-bold">{dealsWonThisMonth}</span>
+                        <span className="text-xl text-indigo-200">/ {goals.dealsTarget}</span>
+                        <span className="text-sm text-indigo-100 ml-1">deals won</span>
+                      </div>
+                      <div className="h-2.5 bg-white/20 rounded-full mt-2 overflow-hidden">
+                        <div className="h-full bg-emerald-300 rounded-full transition-all" style={{ width: `${dealsPct}%` }} />
+                      </div>
+                      <p className="text-xs text-indigo-100 mt-1">{dealsPct}% of target</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
             {(myOverdue.length > 0 || myDueToday.length > 0) ? (
               <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4">
                 <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2 mb-3"><ListChecks size={15} className="text-indigo-600" /> My tasks — needs attention</h2>
@@ -2198,10 +2256,24 @@ export default function NexifyCRM() {
                 </table>
               </div>
             </div>
+            <div className="bg-white rounded-xl border border-gray-200 p-5 mt-4">
+              <h2 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-2"><Target size={15} /> Monthly goal</h2>
+              <p className="text-xs text-gray-400 mb-3">Set this month's targets. Progress auto-tracks on everyone's Dashboard. Set to 0 to hide.</p>
+              <div className="flex flex-wrap items-end gap-4">
+                <div>
+                  <label className={labelCls}>New leads target</label>
+                  <input type="number" min="0" defaultValue={goals.leadsTarget || ""} id="goal-leads" placeholder="e.g. 50" className="w-32 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                </div>
+                <div>
+                  <label className={labelCls}>Deals won target</label>
+                  <input type="number" min="0" defaultValue={goals.dealsTarget || ""} id="goal-deals" placeholder="e.g. 10" className="w-32 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                </div>
+                <button onClick={() => saveGoals(document.getElementById("goal-leads").value, document.getElementById("goal-deals").value)} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition">Save goal</button>
+              </div>
+              <p className="text-xs text-gray-400 mt-3">Currently this month: <b>{leadsThisMonth}</b> new leads · <b>{dealsWonThisMonth}</b> deals won.</p>
+            </div>
           </div>
         )}
-
-        {tab === "history" && (
           <div>
             <div className="bg-white rounded-xl border border-gray-200 p-5">
               <h2 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-2"><History size={15} /> Change history</h2>
