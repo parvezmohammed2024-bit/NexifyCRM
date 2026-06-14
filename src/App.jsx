@@ -114,6 +114,7 @@ export default function NexifyCRM() {
   const [chatMessages, setChatMessages] = useState([]);
   const [chatText, setChatText] = useState("");
   const [bellOpen, setBellOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [lastSeen, setLastSeen] = useState(() => {
     try { return localStorage.getItem("nexify-bell-seen") || ""; } catch { return ""; }
   });
@@ -1198,11 +1199,27 @@ export default function NexifyCRM() {
     );
   }
 
+  const navItems = [
+    { id: "dashboard", label: "Dashboard", icon: LayoutDashboard, exec: false },
+    { id: "leads", label: "Leads", icon: Target, exec: true },
+    { id: "clients", label: "Clients", icon: Briefcase, exec: true },
+    { id: "deals", label: "Deals", icon: TrendingUp, exec: false },
+    { id: "tasks", label: "Tasks", icon: ListChecks, exec: false },
+    { id: "chat", label: "Chat", icon: MessageCircle, exec: false },
+    { id: "reports", label: "Reports", icon: TrendingUp, exec: true },
+    { id: "history", label: "History", icon: History, exec: true },
+    { id: "team", label: "Team", icon: Users, exec: true },
+  ].filter((t) => isExec || !t.exec);
+  // Mobile bottom bar: 4 primary tabs + "More" sheet for the rest
+  const mobilePrimaryIds = ["dashboard", "tasks", "chat", isExec ? "leads" : "deals"];
+  const bottomPrimary = mobilePrimaryIds.map((id) => navItems.find((n) => n.id === id)).filter(Boolean);
+  const bottomMore = navItems.filter((n) => !mobilePrimaryIds.includes(n.id));
+
   return (
-    <div className="min-h-screen bg-gray-50" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
+    <div className="min-h-screen bg-gray-50 overflow-x-hidden" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
       <header className="bg-white border-b border-gray-200">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-3">
+        <div className="max-w-6xl mx-auto px-4 md:px-6 py-3 md:py-4 flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-2 md:gap-3">
             {logoUrl ? (
               <img src={logoUrl} alt="logo" className="w-9 h-9 rounded-lg object-cover" />
             ) : (
@@ -1219,12 +1236,12 @@ export default function NexifyCRM() {
               <p className="text-xs text-emerald-600 flex items-center gap-1"><Users size={11} /> Shared team workspace</p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            {saveState === "saving" && <span className="text-xs text-gray-400">Saving…</span>}
-            {saveState === "saved" && <span className="text-xs text-emerald-600">Saved</span>}
+          <div className="flex items-center gap-2 md:gap-3">
+            {saveState === "saving" && <span className="text-xs text-gray-400 hidden sm:inline">Saving…</span>}
+            {saveState === "saved" && <span className="text-xs text-emerald-600 hidden sm:inline">Saved</span>}
             {saveState === "error" && <span className="text-xs text-red-500">Save failed</span>}
-            <button onClick={exportExcel} title="Export all data to Excel" className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 text-gray-600 rounded-lg text-sm hover:bg-gray-50 transition">
-              <Download size={14} /> Export
+            <button onClick={exportExcel} title="Export all data to Excel" className="flex items-center gap-1.5 px-2 md:px-3 py-1.5 border border-gray-200 text-gray-600 rounded-lg text-sm hover:bg-gray-50 transition">
+              <Download size={14} /> <span className="hidden md:inline">Export</span>
             </button>
             <div className="relative">
               <button onClick={openBell} title="Notifications" className="relative flex items-center px-2 py-1.5 border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 transition">
@@ -1274,18 +1291,8 @@ export default function NexifyCRM() {
             <button onClick={() => supabase.auth.signOut()} title="Sign out" className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 text-gray-600 rounded-lg text-sm hover:bg-gray-50 transition">
               <LogOut size={14} />
             </button>
-            <nav className="flex bg-gray-100 rounded-lg p-1 flex-wrap">
-              {[
-                { id: "dashboard", label: "Dashboard", icon: LayoutDashboard, exec: false },
-                { id: "leads", label: "Leads", icon: Target, exec: true },
-                { id: "clients", label: "Clients", icon: Briefcase, exec: true },
-                { id: "deals", label: "Deals", icon: TrendingUp, exec: false },
-                { id: "tasks", label: "Tasks", icon: ListChecks, exec: false },
-                { id: "chat", label: "Chat", icon: MessageCircle, exec: false },
-                { id: "reports", label: "Reports", icon: TrendingUp, exec: true },
-                { id: "history", label: "History", icon: History, exec: true },
-                { id: "team", label: "Team", icon: Users, exec: true },
-              ].filter((t) => isExec || !t.exec).map((t) => (
+            <nav className="hidden md:flex bg-gray-100 rounded-lg p-1 flex-wrap">
+              {navItems.map((t) => (
                 <button
                   key={t.id}
                   onClick={() => { setTab(t.id); setSearch(""); }}
@@ -1300,7 +1307,7 @@ export default function NexifyCRM() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-6 py-6">
+      <main className="max-w-6xl mx-auto px-4 md:px-6 py-5 md:py-6 pb-24 md:pb-6">
         {tab === "dashboard" && (
           <div>
             {(myOverdue.length > 0 || myDueToday.length > 0) ? (
@@ -1915,13 +1922,13 @@ export default function NexifyCRM() {
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
-              <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-3 mb-5">
+              <div className="flex flex-wrap gap-1.5 order-2 sm:order-1">
                 {["All", "Mine", ...taskTypes].map((f) => (
                   <button key={f} onClick={() => setTaskTypeFilter(f)} className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${taskTypeFilter === f ? "bg-indigo-600 text-white" : "bg-white border border-gray-200 text-gray-600 hover:bg-gray-50"}`}>{f}</button>
                 ))}
               </div>
-              <button onClick={openTaskModal} className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition">
+              <button onClick={openTaskModal} className="flex items-center justify-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition order-1 sm:order-2 w-full sm:w-auto">
                 <Plus size={15} /> Create task
               </button>
             </div>
@@ -1953,7 +1960,7 @@ export default function NexifyCRM() {
                 ) : (
                   <div className="space-y-2">
                     {group.items.map((t) => (
-                      <div key={t.id} className="flex items-center gap-3 text-sm py-2 border-b border-gray-50 last:border-0">
+                      <div key={t.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm py-2 border-b border-gray-50 last:border-0">
                         {t.kind === "followup" ? (
                           <span className="w-4 h-4 rounded-full bg-amber-100 flex items-center justify-center shrink-0"><CalendarClock size={10} className="text-amber-600" /></span>
                         ) : (
@@ -2218,8 +2225,42 @@ export default function NexifyCRM() {
 
       </main>
 
+      {/* Mobile bottom tab bar */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 flex z-40" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+        {bottomPrimary.map((t) => (
+          <button key={t.id} onClick={() => { setTab(t.id); setSearch(""); setMoreOpen(false); }} className={`flex-1 flex flex-col items-center justify-center gap-0.5 py-2 text-xs ${tab === t.id ? "text-indigo-600" : "text-gray-400"}`}>
+            <t.icon size={20} />
+            <span className="text-[10px]">{t.label}</span>
+          </button>
+        ))}
+        {bottomMore.length > 0 && (
+          <button onClick={() => setMoreOpen((o) => !o)} className={`flex-1 flex flex-col items-center justify-center gap-0.5 py-2 text-xs ${moreOpen || bottomMore.some((b) => b.id === tab) ? "text-indigo-600" : "text-gray-400"}`}>
+            <List size={20} />
+            <span className="text-[10px]">More</span>
+          </button>
+        )}
+      </nav>
+
+      {/* Mobile "More" sheet */}
+      {moreOpen && (
+        <div className="md:hidden fixed inset-0 z-40" onClick={() => setMoreOpen(false)}>
+          <div className="absolute inset-0 bg-black/30" />
+          <div className="absolute bottom-[60px] left-0 right-0 bg-white rounded-t-2xl p-3 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-3" />
+            <div className="grid grid-cols-3 gap-2">
+              {bottomMore.map((t) => (
+                <button key={t.id} onClick={() => { setTab(t.id); setSearch(""); setMoreOpen(false); }} className={`flex flex-col items-center justify-center gap-1 py-3 rounded-xl ${tab === t.id ? "bg-indigo-50 text-indigo-600" : "bg-gray-50 text-gray-600"}`}>
+                  <t.icon size={20} />
+                  <span className="text-xs">{t.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {taskModal && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setTaskModal(false)}>
+        <div className="fixed inset-0 bg-black/40 flex items-start sm:items-center justify-center p-4 z-50 overflow-y-auto" onClick={() => setTaskModal(false)}>
           <div className="bg-white rounded-2xl w-full max-w-lg overflow-y-auto p-6" style={{ maxHeight: "88vh" }} onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-base font-semibold text-gray-900">{taskEditId ? "Edit task" : "New task"}</h2>
@@ -2282,7 +2323,7 @@ export default function NexifyCRM() {
       )}
 
       {profileModal && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setProfileModal(false)}>
+        <div className="fixed inset-0 bg-black/40 flex items-start sm:items-center justify-center p-4 z-50 overflow-y-auto" onClick={() => setProfileModal(false)}>
           <div className="bg-white rounded-2xl w-full max-w-sm p-6" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-base font-semibold text-gray-900">My profile</h2>
@@ -2311,7 +2352,7 @@ export default function NexifyCRM() {
       )}
 
       {completing && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setCompleting(null)}>
+        <div className="fixed inset-0 bg-black/40 flex items-start sm:items-center justify-center p-4 z-50 overflow-y-auto" onClick={() => setCompleting(null)}>
           <div className="bg-white rounded-2xl w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-1">
               <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2"><Check size={17} className="text-emerald-600" /> Complete task</h2>
@@ -2352,7 +2393,7 @@ export default function NexifyCRM() {
       )}
 
       {importPreview && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setImportPreview(null)}>
+        <div className="fixed inset-0 bg-black/40 flex items-start sm:items-center justify-center p-4 z-50 overflow-y-auto" onClick={() => setImportPreview(null)}>
           <div className="bg-white rounded-2xl w-full max-w-3xl flex flex-col p-6" style={{ maxHeight: "88vh" }} onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-1">
               <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
@@ -2417,7 +2458,7 @@ export default function NexifyCRM() {
       )}
 
       {modal && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setModal(null)}>
+        <div className="fixed inset-0 bg-black/40 flex items-start sm:items-center justify-center p-4 z-50 overflow-y-auto" onClick={() => setModal(null)}>
           <div className="bg-white rounded-2xl w-full max-w-lg overflow-y-auto p-6" style={{ maxHeight: "88vh" }} onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-base font-semibold text-gray-900">
