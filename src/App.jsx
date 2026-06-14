@@ -2166,6 +2166,23 @@ export default function NexifyCRM() {
                 <button onClick={addTaskType} disabled={!newTypeText.trim()} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition disabled:opacity-50">Add type</button>
               </div>
             </div>
+
+            <div className="bg-white rounded-xl border border-gray-200 p-5 mt-4">
+              <h2 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-2"><Target size={15} /> Monthly goal</h2>
+              <p className="text-xs text-gray-400 mb-3">Set this month's targets. Progress auto-tracks on everyone's Dashboard. Set to 0 to hide.</p>
+              <div className="flex flex-wrap items-end gap-4">
+                <div>
+                  <label className={labelCls}>New leads target</label>
+                  <input type="number" min="0" defaultValue={goals.leadsTarget || ""} id="goal-leads" placeholder="e.g. 50" className="w-32 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                </div>
+                <div>
+                  <label className={labelCls}>Deals won target</label>
+                  <input type="number" min="0" defaultValue={goals.dealsTarget || ""} id="goal-deals" placeholder="e.g. 10" className="w-32 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                </div>
+                <button onClick={() => saveGoals(document.getElementById("goal-leads").value, document.getElementById("goal-deals").value)} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition">Save goal</button>
+              </div>
+              <p className="text-xs text-gray-400 mt-3">Currently this month: <b>{leadsThisMonth}</b> new leads · <b>{dealsWonThisMonth}</b> deals won.</p>
+            </div>
           </div>
         )}
 
@@ -2256,24 +2273,10 @@ export default function NexifyCRM() {
                 </table>
               </div>
             </div>
-            <div className="bg-white rounded-xl border border-gray-200 p-5 mt-4">
-              <h2 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-2"><Target size={15} /> Monthly goal</h2>
-              <p className="text-xs text-gray-400 mb-3">Set this month's targets. Progress auto-tracks on everyone's Dashboard. Set to 0 to hide.</p>
-              <div className="flex flex-wrap items-end gap-4">
-                <div>
-                  <label className={labelCls}>New leads target</label>
-                  <input type="number" min="0" defaultValue={goals.leadsTarget || ""} id="goal-leads" placeholder="e.g. 50" className="w-32 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-                </div>
-                <div>
-                  <label className={labelCls}>Deals won target</label>
-                  <input type="number" min="0" defaultValue={goals.dealsTarget || ""} id="goal-deals" placeholder="e.g. 10" className="w-32 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-                </div>
-                <button onClick={() => saveGoals(document.getElementById("goal-leads").value, document.getElementById("goal-deals").value)} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition">Save goal</button>
-              </div>
-              <p className="text-xs text-gray-400 mt-3">Currently this month: <b>{leadsThisMonth}</b> new leads · <b>{dealsWonThisMonth}</b> deals won.</p>
-            </div>
           </div>
         )}
+
+        {tab === "history" && (
           <div>
             <div className="bg-white rounded-xl border border-gray-200 p-5">
               <h2 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-2"><History size={15} /> Change history</h2>
