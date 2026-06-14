@@ -30,6 +30,21 @@ export default async function handler(req, res) {
     const clients = d.clients || [];
     const generalTasks = d.generalTasks || [];
     const profiles = d.profiles || {};
+    const leads = d.leads || [];
+    const goals = d.goals || { leadsTarget: 0, dealsTarget: 0 };
+
+    // Monthly goal progress for the email banner
+    const monthPrefix = todayStr().slice(0, 7);
+    const leadsThisMonth = leads.filter((l) => (l.createdAt || "").slice(0, 7) === monthPrefix).length;
+    const dealsWonThisMonth = leads.filter((l) => (l.wonAt || "").slice(0, 7) === monthPrefix).length;
+    const now = new Date();
+    const daysLeft = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate() - now.getDate();
+    const hasGoal = goals.leadsTarget > 0 || goals.dealsTarget > 0;
+    const goalBanner = hasGoal
+      ? `<div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:14px;color:#3730a3;">
+          📊 <b>This month:</b> ${goals.leadsTarget > 0 ? `${leadsThisMonth}/${goals.leadsTarget} new leads` : ""}${goals.leadsTarget > 0 && goals.dealsTarget > 0 ? " &middot; " : ""}${goals.dealsTarget > 0 ? `${dealsWonThisMonth}/${goals.dealsTarget} deals won` : ""} &middot; ${daysLeft} day${daysLeft !== 1 ? "s" : ""} left
+        </div>`
+      : "";
 
     // Gather all open tasks by assignee
     const tasks = [];
@@ -64,6 +79,7 @@ export default async function handler(req, res) {
       const html = `
         <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
           <h2 style="color:#4f46e5;">Hi ${nameOf(email)}, here are your tasks</h2>
+          ${goalBanner}
           <p style="color:#555;">You have <b>${list.length}</b> open task${list.length !== 1 ? "s" : ""}${overdue.length ? `, including <b style="color:#dc2626;">${overdue.length} overdue</b>` : ""}.</p>
           <table style="width:100%;border-collapse:collapse;font-size:14px;">
             <thead><tr style="text-align:left;color:#999;font-size:12px;">
