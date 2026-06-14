@@ -97,6 +97,7 @@ export default function NexifyCRM() {
   const [payAmount, setPayAmount] = useState("");
   const [dragId, setDragId] = useState(null);
   const fileInputRef = useRef(null);
+  const loadedOkRef = useRef(false); // true only after a successful data read — guards against blank overwrites
 
   const [session, setSession] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
@@ -123,8 +124,15 @@ export default function NexifyCRM() {
 
   const loadData = async (email) => {
     try {
-      const { data } = await supabase.from("crm_data").select("data").eq("id", 1).single();
-      const d = (data && data.data) || {};
+      const { data, error } = await supabase.from("crm_data").select("data").eq("id", 1).single();
+      // SAFETY: if the read failed or returned no row, do NOT write anything.
+      // Writing here would overwrite real data with blanks. Just stop and let a refresh retry.
+      if (error || !data) {
+        setLoaded(true);
+        return;
+      }
+      const d = data.data || {};
+      const rowLoaded = !!data.data; // the row exists and carries a data object
       const L = (d.leads || []).map((l) => ({ activities: [], nextFollowUp: "", ...l }));
       const C = (d.clients || []).map((c) => ({ tasks: [], payments: [], ...c }));
       const G = d.generalTasks || [];
@@ -134,6 +142,7 @@ export default function NexifyCRM() {
       const TT = (d.taskTypes && d.taskTypes.length) ? d.taskTypes : TASK_TYPES;
       const GOALS = d.goals || { leadsTarget: 0, dealsTarget: 0 };
       let CK = d.checkins || [];
+      loadedOkRef.current = true; // a real read succeeded; writes are now safe
       setLeads(L);
       setClients(C);
       setGeneralTasks(G);
@@ -142,9 +151,9 @@ export default function NexifyCRM() {
       setLogoUrl(LOGO);
       setTaskTypes(TT);
       setGoals(GOALS);
-      // Auto daily check-in: logging in once a day records the user's attendance
+      // Auto daily check-in — ONLY when the row genuinely loaded (never overwrite with blanks)
       const today = todayStr();
-      if (email && !CK.some((c) => c.email === email && c.date === today)) {
+      if (rowLoaded && email && !CK.some((c) => c.email === email && c.date === today)) {
         CK = [...CK, { email, date: today }];
         try {
           await supabase.from("crm_data").update({ data: { leads: L, clients: C, generalTasks: G, roles: R, profiles: P, logoUrl: LOGO, taskTypes: TT, goals: GOALS, checkins: CK }, updated_at: new Date().toISOString() }).eq("id", 1);
@@ -215,6 +224,9 @@ export default function NexifyCRM() {
   };
 
   const persist = async (newLeads = leads, newClients = clients, newGeneral = generalTasks, newCheckins = checkins, newRoles = roles, newProfiles = profiles, newLogo = logoUrl, newTaskTypes = taskTypes, newGoals = goals) => {
+    // SAFETY: never write until we've successfully loaded the existing data at least once.
+    // This prevents an empty initial state from overwriting real data.
+    if (!loadedOkRef.current) return;
     try {
       setSaveState("saving");
       const { error } = await supabase.from("crm_data").update({ data: { leads: newLeads, clients: newClients, generalTasks: newGeneral, checkins: newCheckins, roles: newRoles, profiles: newProfiles, logoUrl: newLogo, taskTypes: newTaskTypes, goals: newGoals }, updated_at: new Date().toISOString() }).eq("id", 1);
@@ -972,6 +984,7 @@ export default function NexifyCRM() {
   const myOpenTasks = realTasks.filter((t) => t.assignee === myEmail && !t.done);
   const myDueToday = myOpenTasks.filter((t) => t.due === todayStr());
   const myOverdue = myOpenTasks.filter((t) => t.due && t.due < todayStr());
+  const myUpcoming = myOpenTasks.filter((t) => !t.due || t.due > todayStr()).sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999"));
   const myMentions = chatMessages.filter((m) => m.user_email !== myEmail && (m.text || "").toLowerCase().includes("@" + ownerName(myEmail).toLowerCase()));
   const newMentions = myMentions.filter((m) => !lastSeen || new Date(m.created_at) > new Date(lastSeen));
   const bellCount = newMentions.length + myDueToday.length + myOverdue.length;
@@ -1369,13 +1382,13 @@ export default function NexifyCRM() {
                 </div>
               </div>
             )}
-            {(myOverdue.length > 0 || myDueToday.length > 0) ? (
+            {myOpenTasks.length > 0 ? (
               <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4">
-                <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2 mb-3"><ListChecks size={15} className="text-indigo-600" /> My tasks — needs attention</h2>
+                <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2 mb-3"><ListChecks size={15} className="text-indigo-600" /> My tasks {(myOverdue.length > 0 || myDueToday.length > 0) ? "— needs attention" : ""}</h2>
                 <div className="space-y-1.5">
                   {myOverdue.map((t) => (
-                    <div key={t.id} className="flex items-center gap-2 text-xs">
-                      <button onClick={() => toggleTask(t.clientId, t.id)} title="Mark complete" className="w-3.5 h-3.5 rounded border-2 border-gray-300 bg-white hover:border-emerald-500 shrink-0" />
+                    <div key={t.id} onClick={() => setViewTask(t)} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-50 rounded px-1 -mx-1 py-0.5">
+                      <button onClick={(e) => { e.stopPropagation(); toggleTask(t.clientId, t.id); }} title="Mark complete" className="w-3.5 h-3.5 rounded border-2 border-gray-300 bg-white hover:border-emerald-500 shrink-0" />
                       <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-medium shrink-0">Overdue</span>
                       <span className="text-gray-800 font-medium">{t.title}</span>
                       <span className="text-gray-400">· {t.who}</span>
@@ -1383,20 +1396,35 @@ export default function NexifyCRM() {
                     </div>
                   ))}
                   {myDueToday.map((t) => (
-                    <div key={t.id} className="flex items-center gap-2 text-xs">
-                      <button onClick={() => toggleTask(t.clientId, t.id)} title="Mark complete" className="w-3.5 h-3.5 rounded border-2 border-gray-300 bg-white hover:border-emerald-500 shrink-0" />
+                    <div key={t.id} onClick={() => setViewTask(t)} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-50 rounded px-1 -mx-1 py-0.5">
+                      <button onClick={(e) => { e.stopPropagation(); toggleTask(t.clientId, t.id); }} title="Mark complete" className="w-3.5 h-3.5 rounded border-2 border-gray-300 bg-white hover:border-emerald-500 shrink-0" />
                       <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium shrink-0">Due today</span>
                       <span className="text-gray-800 font-medium">{t.title}</span>
                       <span className="text-gray-400">· {t.who}</span>
                     </div>
                   ))}
+                  {myUpcoming.length > 0 && (
+                    <>
+                      {(myOverdue.length > 0 || myDueToday.length > 0) && <p className="text-xs text-gray-400 pt-1.5">Coming up</p>}
+                      {myUpcoming.slice(0, 4).map((t) => (
+                        <div key={t.id} onClick={() => setViewTask(t)} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-50 rounded px-1 -mx-1 py-0.5">
+                          <button onClick={(e) => { e.stopPropagation(); toggleTask(t.clientId, t.id); }} title="Mark complete" className="w-3.5 h-3.5 rounded border-2 border-gray-300 bg-white hover:border-emerald-500 shrink-0" />
+                          <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 font-medium shrink-0">{t.type}</span>
+                          <span className="text-gray-800 font-medium">{t.title}</span>
+                          <span className="text-gray-400">· {t.who}</span>
+                          <span className="ml-auto text-gray-400 shrink-0">{t.due || "no date"}</span>
+                        </div>
+                      ))}
+                      {myUpcoming.length > 4 && <p className="text-xs text-gray-400">+{myUpcoming.length - 4} more upcoming</p>}
+                    </>
+                  )}
                 </div>
                 <button onClick={() => setTab("tasks")} className="text-xs text-indigo-600 hover:underline mt-3">View all my tasks →</button>
               </div>
             ) : (
               <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4">
                 <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2"><ListChecks size={15} className="text-emerald-600" /> My tasks</h2>
-                <p className="text-xs text-gray-400 mt-1">Nothing overdue or due today — you're on top of it. 🎉</p>
+                <p className="text-xs text-gray-400 mt-1">No open tasks assigned to you right now — you're all clear. 🎉</p>
               </div>
             )}
             {(overdue.length > 0 || dueToday.length > 0) && isExec && (
