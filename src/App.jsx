@@ -20,6 +20,30 @@ const NICHES = ["Education", "Travel & Tourism", "F&B / Restaurant", "E-commerce
 const TASK_TYPES = ["Call", "Email", "LinkedIn", "Meeting", "Other"];
 // The super admin is always an Executive and can never be locked out.
 const SUPER_ADMIN = "parvezmohammed2024@gmail.com";
+// Logo shown on the loading splash (your uploaded CRM logo)
+const APP_LOGO = "https://msuecxqzpoobjxobsfhb.supabase.co/storage/v1/object/public/proofs/logo-1781356505271.png";
+
+function Splash() {
+  return (
+    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
+      <div className="animate-[fadeIn_0.4s_ease]">
+        <img
+          src={APP_LOGO}
+          alt="Nexify CRM"
+          className="w-16 h-16 rounded-2xl object-cover mx-auto shadow-lg"
+          style={{ boxShadow: "0 8px 24px rgba(79,70,229,0.25)" }}
+          onError={(e) => {
+            e.currentTarget.outerHTML = '<div style="width:64px;height:64px;border-radius:16px;background:#4f46e5;display:flex;align-items:center;justify-content:center;color:#fff;font-size:32px;font-weight:700;margin:0 auto;box-shadow:0 8px 24px rgba(79,70,229,0.25)">N</div>';
+          }}
+        />
+        <h1 className="mt-4 text-xl font-bold text-gray-900 text-center">Nexify CRM</h1>
+        <p className="mt-1 text-xs text-gray-400 text-center">Shared team workspace</p>
+        <div className="mt-5 mx-auto w-6 h-6 border-[3px] border-gray-200 border-t-indigo-600 rounded-full animate-spin" />
+      </div>
+      <style>{`@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}`}</style>
+    </div>
+  );
+}
 const PRIORITIES = ["Low", "Medium", "High"];
 const PRIORITY_COLORS = { "Low": "bg-gray-100 text-gray-500 border-gray-200", "Medium": "bg-amber-50 text-amber-700 border-amber-200", "High": "bg-red-50 text-red-600 border-red-200" };
 
@@ -1151,11 +1175,7 @@ export default function NexifyCRM() {
   );
 
   if (!authChecked) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-gray-400 text-sm">Loading…</div>
-      </div>
-    );
+    return <Splash />;
   }
 
   if (!session) {
@@ -1163,11 +1183,7 @@ export default function NexifyCRM() {
   }
 
   if (!loaded) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-gray-400 text-sm">Loading Nexify CRM…</div>
-      </div>
-    );
+    return <Splash />;
   }
 
   function LoginScreen() {
