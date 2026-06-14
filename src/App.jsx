@@ -84,6 +84,7 @@ export default function NexifyCRM() {
   const [taskText, setTaskText] = useState("");
   const [taskModal, setTaskModal] = useState(false);
   const [taskEditId, setTaskEditId] = useState(null);
+  const [viewTask, setViewTask] = useState(null);
   const [taskForm, setTaskForm] = useState({ clientId: "", type: "Call", title: "", description: "", due: "", dueTime: "", priority: "Medium", assignee: "" });
   const [completing, setCompleting] = useState(null); // { clientId, taskId }
   const [proofLink, setProofLink] = useState("");
@@ -2018,11 +2019,11 @@ export default function NexifyCRM() {
                 ) : (
                   <div className="space-y-2">
                     {group.items.map((t) => (
-                      <div key={t.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm py-2 border-b border-gray-50 last:border-0">
+                      <div key={t.id} onClick={() => t.kind !== "followup" && setViewTask(t)} className={`flex flex-wrap items-center gap-x-3 gap-y-1 text-sm py-2 border-b border-gray-50 last:border-0 ${t.kind !== "followup" ? "cursor-pointer hover:bg-gray-50 rounded-lg px-1 -mx-1" : ""}`}>
                         {t.kind === "followup" ? (
                           <span className="w-4 h-4 rounded-full bg-amber-100 flex items-center justify-center shrink-0"><CalendarClock size={10} className="text-amber-600" /></span>
                         ) : (
-                          <button onClick={() => toggleTask(t.clientId, t.id)} title="Mark complete (asks for proof)" className="w-4 h-4 rounded border-2 border-gray-300 bg-white hover:border-emerald-500 hover:bg-emerald-50 shrink-0" />
+                          <button onClick={(e) => { e.stopPropagation(); toggleTask(t.clientId, t.id); }} title="Mark complete (asks for proof)" className="w-4 h-4 rounded border-2 border-gray-300 bg-white hover:border-emerald-500 hover:bg-emerald-50 shrink-0" />
                         )}
                         <span className="text-xs px-1.5 py-0.5 rounded border bg-gray-50 text-gray-500 border-gray-200 shrink-0">{t.type}</span>
                         <span className="text-gray-800 font-medium">{t.title}</span>
@@ -2032,8 +2033,8 @@ export default function NexifyCRM() {
                         <span className="ml-auto text-xs text-gray-400 shrink-0">{t.due}{t.dueTime ? ` ${t.dueTime}` : ""}</span>
                         {isExec && t.kind !== "followup" && (
                           <span className="flex items-center gap-1 shrink-0">
-                            <button onClick={() => openEditTask(t)} title="Edit task" className="p-1 text-gray-300 hover:text-indigo-600 transition"><Pencil size={13} /></button>
-                            <button onClick={() => deleteAnyTask(t.clientId, t.id)} title="Delete task" className="p-1 text-gray-300 hover:text-red-500 transition"><Trash2 size={13} /></button>
+                            <button onClick={(e) => { e.stopPropagation(); openEditTask(t); }} title="Edit task" className="p-1 text-gray-300 hover:text-indigo-600 transition"><Pencil size={13} /></button>
+                            <button onClick={(e) => { e.stopPropagation(); deleteAnyTask(t.clientId, t.id); }} title="Delete task" className="p-1 text-gray-300 hover:text-red-500 transition"><Trash2 size={13} /></button>
                           </span>
                         )}
                       </div>
@@ -2053,7 +2054,7 @@ export default function NexifyCRM() {
                       <div className="min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-xs px-1.5 py-0.5 rounded border bg-gray-50 text-gray-500 border-gray-200">{t.type}</span>
-                          <span className="text-gray-500 line-through">{t.title}</span>
+                          <button onClick={() => setViewTask(t)} className="text-gray-500 line-through text-left hover:text-indigo-600">{t.title}</button>
                           <span className="text-xs text-gray-400">· {t.who}</span>
                         </div>
                         {(t.proofNote || t.proofLink || t.proofImage) && (
@@ -2329,6 +2330,83 @@ export default function NexifyCRM() {
                   <span className="text-xs">{t.label}</span>
                 </button>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {viewTask && (
+        <div className="fixed inset-0 bg-black/40 flex items-start sm:items-center justify-center p-4 z-50 overflow-y-auto" onClick={() => setViewTask(null)}>
+          <div className="bg-white rounded-2xl w-full max-w-lg p-6 my-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between mb-4 gap-3">
+              <div>
+                <div className="flex items-center gap-2 flex-wrap mb-1">
+                  <span className="text-xs px-2 py-0.5 rounded border bg-gray-50 text-gray-600 border-gray-200">{viewTask.type}</span>
+                  {viewTask.priority && <span className={`text-xs px-2 py-0.5 rounded border ${PRIORITY_COLORS[viewTask.priority] || ""}`}>{viewTask.priority} priority</span>}
+                  {viewTask.done ? (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Completed</span>
+                  ) : (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">Open</span>
+                  )}
+                </div>
+                <h2 className="text-lg font-semibold text-gray-900">{viewTask.title}</h2>
+              </div>
+              <button onClick={() => setViewTask(null)} className="text-gray-400 hover:text-gray-600 shrink-0"><X size={18} /></button>
+            </div>
+
+            <div className="space-y-3 text-sm">
+              {viewTask.description ? (
+                <div className="bg-gray-50 rounded-lg p-3">
+                  <p className="text-xs text-gray-400 mb-1">Details</p>
+                  <p className="text-gray-700 whitespace-pre-wrap">{viewTask.description}</p>
+                </div>
+              ) : (
+                <p className="text-xs text-gray-400 italic">No extra details were added.</p>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <p className="text-xs text-gray-400">For</p>
+                  <p className="text-gray-800">{viewTask.who}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-400">Assigned to</p>
+                  <p className="text-gray-800 flex items-center gap-1.5">
+                    {avatarOf(viewTask.assignee) ? <img src={avatarOf(viewTask.assignee)} alt="" className="w-5 h-5 rounded-full object-cover" /> : null}
+                    {viewTask.assignee ? ownerName(viewTask.assignee) : "Unassigned"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-400">Due date</p>
+                  <p className="text-gray-800">{viewTask.due || "—"}{viewTask.dueTime ? ` at ${viewTask.dueTime}` : ""}</p>
+                </div>
+                {viewTask.completedAt && (
+                  <div>
+                    <p className="text-xs text-gray-400">Completed</p>
+                    <p className="text-gray-800">{new Date(viewTask.completedAt).toLocaleDateString()}{viewTask.completedBy ? ` by ${ownerName(viewTask.completedBy)}` : ""}</p>
+                  </div>
+                )}
+              </div>
+
+              {(viewTask.proofNote || viewTask.proofLink || viewTask.proofImage) && (
+                <div className="bg-emerald-50 border border-emerald-100 rounded-lg p-3">
+                  <p className="text-xs text-emerald-700 font-medium mb-1">Proof of work</p>
+                  {viewTask.proofNote && <p className="text-gray-700 mb-1">{viewTask.proofNote}</p>}
+                  {viewTask.proofLink && <button onClick={() => openExternal(viewTask.proofLink.startsWith("http") ? viewTask.proofLink : `https://${viewTask.proofLink}`, "Proof")} className="text-indigo-600 underline text-xs">view link</button>}
+                  {viewTask.proofImage && <img src={viewTask.proofImage} alt="proof" className="mt-2 max-h-48 rounded-lg border border-gray-200" />}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-between gap-2 mt-6">
+              <div>
+                {isExec && (
+                  <button onClick={() => { const t = viewTask; setViewTask(null); openEditTask(t); }} className="px-3 py-2 text-sm text-indigo-600 hover:bg-indigo-50 rounded-lg transition flex items-center gap-1.5"><Pencil size={14} /> Edit</button>
+                )}
+              </div>
+              {!viewTask.done && (
+                <button onClick={() => { const t = viewTask; setViewTask(null); toggleTask(t.clientId, t.id); }} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition">Mark complete</button>
+              )}
             </div>
           </div>
         </div>
